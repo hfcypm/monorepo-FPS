@@ -9,7 +9,8 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
 
     "types": ["bun"],
 
@@ -23,9 +24,9 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
+  "include": [],
   "references": [
     { "path": "packages/shared" },
-    { "path": "packages/server" },
-    { "path": "packages/client" }
+    { "path": "packages/server" }
   ]
 }

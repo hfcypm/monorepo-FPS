@@ -38,11 +38,11 @@ async function fetchMainStack(pkg: string) {
     const lines = stack.split("\n").filter(line => line.includes(pkg));
     stack = lines.join("\n").substring(0, 7000);
 
-    app.server?.publish("stack-event", {
+    app.server?.publish("stack-event", JSON.stringify({
       time: new Date().toLocaleTimeString(),
       package: pkg,
       stack
-    });
+    }));
   } catch { } finally {
     setTimeout(() => { captureLock = false; }, 1000);
   }
@@ -59,13 +59,13 @@ setInterval(async () => {
     const match = raw.match(reg);
     if (!match) return;
 
-    const rows = match[1].trim().split("\n");
+    const rows = match[1]!.trim().split("\n");
     let sumCost = 0;
     let count = 0;
 
     for (const line of rows) {
       const arr = line.trim().split(/\s+/).map(Number);
-      const cost = arr[0] + arr[1] + arr[2] + arr[3];
+      const cost = (arr[0] ?? 0) + (arr[1] ?? 0) + (arr[2] ?? 0) + (arr[3] ?? 0);
       if (cost > 0) {
         sumCost += cost;
         count++;
@@ -87,12 +87,12 @@ setInterval(async () => {
     if (frameData.length > MAX_POINT) frameData.shift();
     const jankRate = totalFrames > 0 ? (jankCount / totalFrames) * 100 : 0;
 
-    app.server?.publish("fps-event", {
+    app.server?.publish("fps-event", JSON.stringify({
       fps,
       list: frameData,
       jankRate: jankRate.toFixed(2),
       pkg
-    });
+    }));
   } catch { }
 }, 120);
 

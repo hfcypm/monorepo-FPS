@@ -45,8 +45,8 @@ export default function App() {
     let rafId: number;
 
     function render() {
-      const w = canvas.width;
-      const h = canvas.height;
+      const w = canvas!.width;
+      const h = canvas!.height;
       ctx.fillStyle = "#171717";
       ctx.fillRect(0, 0, w, h);
 
