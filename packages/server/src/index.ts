@@ -1,10 +1,14 @@
-import { Elysia, $ } from "elysia";
+import { Elysia } from "elysia";
+import { staticPlugin } from "@elysiajs/static";
+import { $ } from "bun";
 import { mkdirSync, existsSync } from "fs";
 
-const app = new Elysia();
+const app = new Elysia()
+  .use(staticPlugin({ assets: "dist", prefix: "/" }));
 
 if (!existsSync("./logs")) mkdirSync("./logs");
 if (!existsSync("./traces")) mkdirSync("./traces");
+if (!existsSync("./dist")) mkdirSync("./dist");
 
 const MAX_POINT = 150;
 let frameData: number[] = [];
@@ -34,7 +38,7 @@ async function fetchMainStack(pkg: string) {
     const lines = stack.split("\n").filter(line => line.includes(pkg));
     stack = lines.join("\n").substring(0, 7000);
 
-    app.server?.Publish("stack-event", {
+    app.server?.publish("stack-event", {
       time: new Date().toLocaleTimeString(),
       package: pkg,
       stack
@@ -83,7 +87,7 @@ setInterval(async () => {
     if (frameData.length > MAX_POINT) frameData.shift();
     const jankRate = totalFrames > 0 ? (jankCount / totalFrames) * 100 : 0;
 
-    app.server?.Publish("fps-event", {
+    app.server?.publish("fps-event", {
       fps,
       list: frameData,
       jankRate: jankRate.toFixed(2),
@@ -92,17 +96,14 @@ setInterval(async () => {
   } catch { }
 }, 120);
 
-app.websocket("/ws", {
+app.ws("/ws", {
   open(ws) {
     ws.subscribe("fps-event");
     ws.subscribe("stack-event");
   }
 });
 
-app.static("/", "./dist/index.html");
-app.static("/assets", "./dist/assets");
-
-const PORT = 3000;
+const PORT = 3001;
 app.listen(PORT);
 console.log(`✅ 性能面板：http://127.0.0.1:${PORT}`);
 console.log("💡 手机开启无线ADB，自动采集帧率，卡顿自动抓取主线程堆栈");

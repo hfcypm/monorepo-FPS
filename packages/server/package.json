@@ -10,6 +10,7 @@
     "lint": "bunx biome lint src/"
   },
   "dependencies": {
+    "@elysiajs/static": "^1.4.10",
     "elysia": "^1.4.29"
   }
 }
