@@ -1,51 +1,121 @@
-import { useEffect, useState } from 'react'
-import { add } from '@my-monorepo/shared'
+import { useEffect, useRef, useState } from "react";
 
-interface ServerStatus {
-  message: string
-}
+type FpsMessage = {
+  fps: number;
+  list: number[];
+  jankRate: string;
+  pkg: string;
+};
 
-function App() {
-  const [serverMsg, setServerMsg] = useState('loading...')
-  const [error, setError] = useState('')
+type StackMessage = {
+  time: string;
+  package: string;
+  stack: string;
+};
+
+export default function App() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [fpsInfo, setFpsInfo] = useState<FpsMessage>({
+    fps: 60,
+    list: [],
+    jankRate: "0",
+    pkg: "",
+  });
+  const [stackMsg, setStackMsg] = useState<StackMessage | null>(null);
+  const dataRef = useRef<number[]>([]);
 
   useEffect(() => {
-    fetch('/api/hello')
-      .then((res) => res.json())
-      .then((data: ServerStatus) => setServerMsg(data.message))
-      .catch(() => setError('Backend unreachable'))
-  }, [])
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onmessage = (ev) => {
+      const payload = JSON.parse(ev.data);
+      if (payload.stack) {
+        setStackMsg(payload);
+        return;
+      }
+      setFpsInfo(payload);
+      dataRef.current = payload.list;
+    };
+    return () => ws.close();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+    let rafId: number;
+
+    function render() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.fillStyle = "#171717";
+      ctx.fillRect(0, 0, w, h);
+
+      const arr = dataRef.current;
+      const stepX = w / arr.length;
+
+      ctx.strokeStyle = "#facc15";
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      const y60 = h - (60 / 120) * h;
+      ctx.moveTo(0, y60);
+      ctx.lineTo(w, y60);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.beginPath();
+      ctx.strokeStyle = fpsInfo.fps > 55 ? "#4ade80" : "#f87171";
+      ctx.lineWidth = 2;
+      arr.forEach((val, idx) => {
+        const x = idx * stepX;
+        const y = h - (val / 120) * h;
+        idx === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      rafId = requestAnimationFrame(render);
+    }
+    render();
+    return () => cancelAnimationFrame(rafId);
+  }, [fpsInfo.fps]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#0f0f1a] to-[#1a1a2e] text-[#e0e0e0]">
-      <div className="rounded-2xl border border-white/10 bg-white/5 px-12 py-12 text-center backdrop-bl-xl min-w-[360px]">
-        <h1 className="mb-3 text-3xl font-semibold text-[#f0f0f0]">WEB</h1>
+    <div className="max-w-4xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-4 text-emerald-400">Android FPS 性能检测仪</h1>
+      <div className="text-gray-400 mb-2">当前应用：{fpsInfo.pkg || "等待 ADB 连接..."}</div>
 
-        <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-green-500/15 px-5 py-2 font-semibold text-green-400">
-          <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-green-400" />
-          Service Running
+      <div className="flex gap-8 my-4 text-xl">
+        <div>
+          FPS：
+          <span className={fpsInfo.fps > 55 ? "text-green-400" : "text-red-400 font-bold"}>
+            {fpsInfo.fps}
+          </span>
         </div>
-
-        <div className="rounded-xl bg-white/[0.03] px-6 py-5 text-left">
-          <Row label="Client Port" value="3000" />
-          <Row label="Server Port" value="3001" />
-          <Row label="Framework" value="React + Vite" />
-          <Row label="Runtime" value="Bun" />
-          <Row label="Shared calc" value={`add(40, 2) = ${add(40, 2)}`} />
-          <Row last label="API Response" value={error || serverMsg} />
+        <div>
+          卡顿率：
+          <span className={Number(fpsInfo.jankRate) > 5 ? "text-red-400" : "text-green-400"}>
+            {fpsInfo.jankRate}%
+          </span>
         </div>
       </div>
-    </div>
-  )
-}
 
-function Row({ label, value, last }: { label: string; value: string; last?: boolean }) {
-  return (
-    <div className={`flex justify-between py-2 ${last ? '' : 'border-b border-white/5'}`}>
-      <span className="text-sm text-[#888]">{label}</span>
-      <span className="text-sm font-medium text-[#ccc]">{value}</span>
-    </div>
-  )
-}
+      <canvas ref={canvasRef} width={900} height={340} className="rounded border border-neutral-700 w-full" />
+      <p className="text-sm text-gray-500 mt-2">黄色虚线=60帧标准线，帧耗时 18ms判定卡顿</p>
 
-export default App
+      {stackMsg && (
+        <div className="mt-6 border border-red-500 bg-red-950/30 p-4 rounded-lg">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="text-red-400 font-medium">
+              ⚠️ 卡顿捕获 {stackMsg.time} | {stackMsg.package}
+            </h3>
+            <button onClick={() => setStackMsg(null)} className="px-2 py-1 bg-neutral-700 rounded text-sm">
+              关闭
+            </button>
+          </div>
+          <pre className="overflow-auto max-h-72 p-3 bg-black/60 rounded text-xs text-gray-300 whitespace-pre-wrap">
+            {stackMsg.stack || "未捕获业务堆栈"}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}

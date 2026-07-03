@@ -1,83 +1,108 @@
-import { Elysia } from "elysia";
-import { greet } from "@my-monorepo/shared";
+import { Elysia, $ } from "elysia";
+import { mkdirSync, existsSync } from "fs";
 
-const app = new Elysia()
-  .get("/", () => {
-    return new Response(
-      `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Monorepo</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #e0e0e0;
-    }
-    .container {
-      text-align: center;
-      padding: 48px;
-      border-radius: 16px;
-      background: rgba(255,255,255,0.05);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    h1 { font-size: 2rem; margin-bottom: 12px; color: #f0f0f0; }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 20px;
-      border-radius: 24px;
-      background: rgba(76, 175, 80, 0.15);
-      color: #4caf50;
-      font-weight: 600;
-      margin: 16px 0;
-    }
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #4caf50;
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
-    .info { color: #888; font-size: 0.9rem; margin-top: 24px; }
-    .info span { color: #aaa; font-weight: 500; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>My Monorepo</h1>
-    <div class="status">
-      <span class="dot"></span>
-      ${greet("Monorepo")}
-    </div>
-    <p>Elysia + Bun Monorepo 运行正常</p>
-    <div class="info">
-      <p>Runtime: <span>Bun</span></p>
-      <p>Framework: <span>Elysia</span></p>
-      <p>Port: <span>3001</span></p>
-    </div>
-  </div>
-</body>
-</html>`,
-      { headers: { "Content-Type": "text/html; charset=utf-8" } }
-    );
-  })
-  .get("/api/hello", () => ({
-    message: greet("Monorepo"),
-  }))
-  .listen(3001);
+const app = new Elysia();
 
-console.log(`Server running at ${app.server?.url}`);
+if (!existsSync("./logs")) mkdirSync("./logs");
+if (!existsSync("./traces")) mkdirSync("./traces");
+
+const MAX_POINT = 150;
+let frameData: number[] = [];
+let jankCount = 0;
+let totalFrames = 0;
+let captureLock = false;
+
+async function getForegroundPackage() {
+  try {
+    const text = await $`adb shell dumpsys window | grep mCurrentFocus`.text();
+    const ret = text.match(/([\w\.]+)\//);
+    return ret ? ret[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMainStack(pkg: string) {
+  if (captureLock) return;
+  captureLock = true;
+  try {
+    const pidStr = await $`adb shell pidof ${pkg}`.text();
+    const pid = pidStr.trim();
+    if (!pid) return;
+
+    let stack = await $`adb shell dumpsys thread ${pid} main`.text();
+    const lines = stack.split("\n").filter(line => line.includes(pkg));
+    stack = lines.join("\n").substring(0, 7000);
+
+    app.server?.Publish("stack-event", {
+      time: new Date().toLocaleTimeString(),
+      package: pkg,
+      stack
+    });
+  } catch { } finally {
+    setTimeout(() => { captureLock = false; }, 1000);
+  }
+}
+
+setInterval(async () => {
+  const pkg = await getForegroundPackage();
+  if (!pkg) return;
+
+  try {
+    await $`adb shell dumpsys gfxinfo ${pkg} reset`.quiet();
+    const raw = await $`adb shell dumpsys gfxinfo ${pkg} framestats`.text();
+    const reg = /Profile data in ms:\n([\s\S]*?)\n\n/;
+    const match = raw.match(reg);
+    if (!match) return;
+
+    const rows = match[1].trim().split("\n");
+    let sumCost = 0;
+    let count = 0;
+
+    for (const line of rows) {
+      const arr = line.trim().split(/\s+/).map(Number);
+      const cost = arr[0] + arr[1] + arr[2] + arr[3];
+      if (cost > 0) {
+        sumCost += cost;
+        count++;
+        totalFrames++;
+      }
+    }
+
+    let fps = 60;
+    let avgFrame = 0;
+    if (count > 0) {
+      avgFrame = sumCost / count;
+      fps = Math.min(120, Math.round(1000 / avgFrame));
+      if (avgFrame > 18) {
+        fetchMainStack(pkg);
+      }
+    }
+
+    frameData.push(fps);
+    if (frameData.length > MAX_POINT) frameData.shift();
+    const jankRate = totalFrames > 0 ? (jankCount / totalFrames) * 100 : 0;
+
+    app.server?.Publish("fps-event", {
+      fps,
+      list: frameData,
+      jankRate: jankRate.toFixed(2),
+      pkg
+    });
+  } catch { }
+}, 120);
+
+app.websocket("/ws", {
+  open(ws) {
+    ws.subscribe("fps-event");
+    ws.subscribe("stack-event");
+  }
+});
+
+app.static("/", "./dist/index.html");
+app.static("/assets", "./dist/assets");
+
+const PORT = 3000;
+app.listen(PORT);
+console.log(`✅ 性能面板：http://127.0.0.1:${PORT}`);
+console.log("💡 手机开启无线ADB，自动采集帧率，卡顿自动抓取主线程堆栈");
