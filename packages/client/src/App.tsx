@@ -19,7 +19,7 @@ function App() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#0f0f1a] to-[#1a1a2e] text-[#e0e0e0]">
       <div className="rounded-2xl border border-white/10 bg-white/5 px-12 py-12 text-center backdrop-bl-xl min-w-[360px]">
-        <h1 className="mb-3 text-3xl font-semibold text-[#f0f0f0]">My Monorepo</h1>
+        <h1 className="mb-3 text-3xl font-semibold text-[#f0f0f0]">WEB</h1>
 
         <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-green-500/15 px-5 py-2 font-semibold text-green-400">
           <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-green-400" />
