@@ -58,6 +58,14 @@ type CollectionTarget = {
   packageName: string;
 };
 
+type DiagnosticEntry = {
+  id: string;
+  timestamp: string;
+  level: "info" | "success" | "warning" | "error";
+  message: string;
+  detail?: string;
+};
+
 const app = new Elysia().use(staticPlugin({ assets: "dist", prefix: "/" }));
 
 for (const directory of ["./logs", "./traces", "./dist"]) {
@@ -67,6 +75,7 @@ for (const directory of ["./logs", "./traces", "./dist"]) {
 const SAMPLE_INTERVAL_MS = 1000;
 const MAX_WINDOWS = 150;
 const MAX_INCIDENTS = 30;
+const MAX_DIAGNOSTICS = 80;
 const STACK_CAPTURE_COOLDOWN_MS = 10_000;
 const adbPath = process.env.ADB_PATH ?? "adb";
 
@@ -76,6 +85,17 @@ let collecting = false;
 let lastStackCaptureAt = 0;
 let refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
 let collectionTarget: CollectionTarget | null = null;
+const diagnostics: DiagnosticEntry[] = [];
+
+function recordDiagnostic(entry: Omit<DiagnosticEntry, "id" | "timestamp">) {
+  const latest = diagnostics[0];
+  if (latest?.level === entry.level && latest.message === entry.message && latest.detail === entry.detail) return;
+
+  const diagnostic = { id: randomUUID(), timestamp: new Date().toISOString(), ...entry };
+  diagnostics.unshift(diagnostic);
+  if (diagnostics.length > MAX_DIAGNOSTICS) diagnostics.pop();
+  app.server?.publish("diagnostic-event", JSON.stringify({ event: "diagnostic", entry: diagnostic }));
+}
 
 function validAdbIdentifier(value: unknown) {
   return typeof value === "string" && /^[A-Za-z0-9._:-]+$/.test(value);
@@ -145,6 +165,7 @@ async function captureMainStack(session: PerformanceSession, incident: Performan
     app.server?.publish("stack-event", JSON.stringify({ event: "stack", sessionId: session.id, incident }));
   } catch (error) {
     incident.stack = `主线程堆栈采集失败：${error instanceof Error ? error.message : "未知错误"}`;
+    recordDiagnostic({ level: "warning", message: "主线程堆栈采集失败", detail: incident.stack });
   }
 }
 
@@ -164,6 +185,7 @@ async function collectPerformance() {
   try {
     if (!collectionTarget) {
       if (activeSession) activeSession.status = "waiting";
+      recordDiagnostic({ level: "warning", message: "等待采集目标", detail: "请选择设备和第三方应用后发起连接" });
       return;
     }
 
@@ -178,7 +200,10 @@ async function collectPerformance() {
     const frameCosts = parseFrameCosts(raw);
     await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} reset`.quiet();
 
-    if (frameCosts.length === 0) return;
+    if (frameCosts.length === 0) {
+      recordDiagnostic({ level: "warning", message: "未读取到帧数据", detail: `${collectionTarget.deviceId} · ${collectionTarget.packageName}，请打开应用并进行界面操作` });
+      return;
+    }
 
     const frameBudgetMs = 1000 / refreshRate;
     const totalFrames = frameCosts.length;
@@ -212,6 +237,7 @@ async function collectPerformance() {
     session.windows.push(window);
     if (session.windows.length > MAX_WINDOWS) session.windows.shift();
     persistWindow(session, window);
+    recordDiagnostic({ level: "success", message: "采集窗口已刷新", detail: `${session.deviceId} · ${session.packageName} · ${totalFrames} 帧 · ${window.fps} FPS` });
 
     if (severity !== "normal") {
       const incident: PerformanceIncident = {
@@ -229,14 +255,16 @@ async function collectPerformance() {
 
     app.server?.publish("performance-event", JSON.stringify({ event: "performance", session }));
   } catch (error) {
+    const message = error instanceof Error ? error.message : "采集器发生未知错误";
     if (activeSession) {
       activeSession.status = "error";
-      activeSession.error = error instanceof Error ? error.message : "采集器发生未知错误";
+      activeSession.error = message;
       activeSession.updatedAt = new Date().toISOString();
     }
+    recordDiagnostic({ level: "error", message: "ADB 采集失败", detail: message });
     app.server?.publish("collector-event", JSON.stringify({
       event: "collector-error",
-      message: error instanceof Error ? error.message : "采集器发生未知错误",
+      message,
     }));
   } finally {
     collecting = false;
@@ -251,28 +279,38 @@ app.get("/api/health", () => ({
   clickHouse: isClickHouseConfigured() ? "configured" : "memory",
 }));
 
-app.get("/api/devices", async () => ({ devices: await listDevices() }));
+app.get("/api/devices", async () => {
+  const devices = await listDevices();
+  recordDiagnostic({ level: "info", message: "已扫描 ADB 设备", detail: `发现 ${devices.length} 个已授权设备` });
+  return { devices };
+});
 
 app.get("/api/devices/:id/packages", async ({ params, set }) => {
   const deviceId = decodeURIComponent(params.id);
   if (!validAdbIdentifier(deviceId) || !(await listDevices()).some((device) => device.id === deviceId)) {
+    recordDiagnostic({ level: "warning", message: "包名查询失败", detail: "所选设备当前未处于 ADB 已连接状态" });
     set.status = 404;
     return { error: "设备当前不可用" };
   }
-  return { packages: await listPackages(deviceId) };
+  const packages = await listPackages(deviceId);
+  recordDiagnostic({ level: "info", message: "已读取第三方应用列表", detail: `${deviceId} · ${packages.length} 个包名` });
+  return { packages };
 });
 
 app.post("/api/collector/connect", async ({ body, set }) => {
   const target = body as Partial<CollectionTarget>;
   if (!validAdbIdentifier(target.deviceId) || !validAdbIdentifier(target.packageName)) {
+    recordDiagnostic({ level: "warning", message: "连接参数无效", detail: "请选择有效设备和第三方应用包名" });
     set.status = 400;
     return { error: "设备或包名格式无效" };
   }
   if (!(await listDevices()).some((device) => device.id === target.deviceId)) {
+    recordDiagnostic({ level: "warning", message: "连接设备不可用", detail: "刷新设备列表后重新选择目标" });
     set.status = 404;
     return { error: "设备当前不可用，请刷新设备列表" };
   }
   if (!(await listPackages(target.deviceId)).includes(target.packageName)) {
+    recordDiagnostic({ level: "warning", message: "连接包名不可用", detail: "重新读取所选设备的第三方应用列表" });
     set.status = 404;
     return { error: "包名不属于所选设备的第三方应用" };
   }
@@ -280,10 +318,13 @@ app.post("/api/collector/connect", async ({ body, set }) => {
   collectionTarget = { deviceId: target.deviceId, packageName: target.packageName };
   activeSession = null;
   refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
+  recordDiagnostic({ level: "success", message: "采集目标已连接", detail: `${target.deviceId} · ${target.packageName}` });
   return { connected: true, target: collectionTarget };
 });
 
 app.get("/api/sessions", () => ({ activeSession, sessions: [...sessions.values()] }));
+
+app.get("/api/diagnostics", () => ({ entries: diagnostics }));
 
 app.get("/api/sessions/:id", ({ params }) => (
   sessions.get(params.id) ?? { error: "会话不存在" }
@@ -295,7 +336,9 @@ app.ws("/ws", {
     ws.subscribe("incident-event");
     ws.subscribe("stack-event");
     ws.subscribe("collector-event");
+    ws.subscribe("diagnostic-event");
     if (activeSession) ws.send(JSON.stringify({ event: "performance", session: activeSession }));
+    ws.send(JSON.stringify({ event: "diagnostics", entries: diagnostics }));
   },
 });
 

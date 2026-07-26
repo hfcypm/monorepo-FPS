@@ -45,6 +45,14 @@ type Device = {
   model: string;
 };
 
+type DiagnosticEntry = {
+  id: string;
+  timestamp: string;
+  level: "info" | "success" | "warning" | "error";
+  message: string;
+  detail?: string;
+};
+
 const severityLabel: Record<Severity, string> = { normal: "稳定", medium: "关注", high: "高风险", critical: "严重" };
 
 function formatTime(value?: string) {
@@ -165,6 +173,7 @@ export default function App() {
   const [selectedPackage, setSelectedPackage] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [targetMessage, setTargetMessage] = useState("刷新设备列表后选择诊断目标");
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
 
   useEffect(() => {
     let socket: WebSocket | undefined;
@@ -177,18 +186,28 @@ export default function App() {
         if (payload.activeSession) setSession(payload.activeSession);
       } catch { setCollectorMessage("会话服务暂不可用，正在等待实时连接"); }
     };
+    const loadDiagnostics = async () => {
+      try {
+        const response = await fetch("/api/diagnostics");
+        const payload = await response.json() as { entries?: DiagnosticEntry[] };
+        if (response.ok) setDiagnostics(payload.entries ?? []);
+      } catch { /* WebSocket reconnect supplies diagnostics. */ }
+    };
     const connect = () => {
       socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
       socket.onopen = () => { setConnected(true); setCollectorMessage("实时采集链路已建立"); };
       socket.onmessage = (event) => {
-        const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string };
+        const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string; entry?: DiagnosticEntry; entries?: DiagnosticEntry[] };
         if (payload.event === "performance" && payload.session) setSession(payload.session);
         if ((payload.event === "incident" || payload.event === "stack") && payload.incident) setSelectedIncident(payload.incident);
         if (payload.event === "collector-error") setCollectorMessage(payload.message ?? "采集器异常");
+        if (payload.event === "diagnostics" && payload.entries) setDiagnostics(payload.entries);
+        if (payload.event === "diagnostic" && payload.entry) setDiagnostics((entries) => [payload.entry!, ...entries.filter((entry) => entry.id !== payload.entry!.id)].slice(0, 80));
       };
       socket.onclose = () => { setConnected(false); if (!disposed) retryTimer = window.setTimeout(connect, 2000); };
     };
     void loadSession();
+    void loadDiagnostics();
     connect();
     return () => { disposed = true; if (retryTimer) window.clearTimeout(retryTimer); socket?.close(); };
   }, []);
@@ -291,6 +310,11 @@ export default function App() {
           <label>第三方应用<select value={selectedPackage} onChange={(event) => setSelectedPackage(event.target.value)} disabled={!selectedDevice}><option value="">选择应用包名</option>{packages.map((packageName) => <option key={packageName} value={packageName}>{packageName}</option>)}</select></label>
           <button className="secondary-button" onClick={() => void refreshDevices()} disabled={isConnecting}>刷新设备</button>
           <button className="connect-button" onClick={() => void connectTarget()} disabled={!selectedDevice || !selectedPackage || isConnecting}>{isConnecting ? "连接中..." : "发起连接"}</button>
+        </section>
+
+        <section className="diagnostic-log-panel">
+          <div className="diagnostic-log-header"><div><span className="section-kicker">CONNECTION & COLLECTION LOG</span><h2>连接与采集日志</h2></div><span>{diagnostics.length} 条</span></div>
+          <div className="diagnostic-log-list">{diagnostics.length ? diagnostics.slice(0, 8).map((entry) => <div className={`diagnostic-entry ${entry.level}`} key={entry.id}><time>{formatTime(entry.timestamp)}</time><b>{entry.message}</b><span>{entry.detail}</span></div>) : <div className="diagnostic-empty">等待连接操作和 ADB 采样结果。</div>}</div>
         </section>
 
         <section className="session-banner">

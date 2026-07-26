@@ -74,3 +74,14 @@
 1. WHILE 连接目标处于可用状态, the collector SHALL 仅从选中设备和包名读取帧统计。
 2. WHEN 用户连接新的设备或包名, the collector SHALL 创建新的采集会话并更新看板会话信息。
 3. WHEN 连接目标不可用, the collector SHALL 将会话状态更新为 `error` 并保留最近有效窗口。
+
+### Requirement 7: 连接与采集诊断日志
+
+**User Story:** AS 性能工程师, I want 查看连接目标和采样结果日志, so that 可以定位图表未更新的采集环节。
+
+#### Acceptance Criteria
+
+1. WHEN 用户查询设备、查询包名或连接采集目标, the system SHALL 记录操作结果与设备包名输入。
+2. WHEN 采集器读取帧数据, the system SHALL 记录帧数量和 FPS。
+3. IF 采集器无法读取设备、包名或帧数据, the system SHALL 记录失败原因和操作建议。
+4. WHILE 看板连接处于活动状态, the dashboard SHALL 实时显示最近 80 条诊断日志。

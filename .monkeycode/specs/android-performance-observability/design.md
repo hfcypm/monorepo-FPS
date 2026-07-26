@@ -31,6 +31,7 @@ flowchart LR
 - **Session aggregator**: 计算帧预算、卡顿率、冻结帧、平均值和分位数，保留趋势和风险事件。
 - **Session API**: 提供 `/api/health`、`/api/sessions` 与 `/api/sessions/:id`。
 - **Target API**: 提供 `/api/devices`、`/api/devices/:id/packages` 与 `/api/collector/connect`。
+- **Diagnostics API**: 提供 `/api/diagnostics`，并通过 `diagnostic-event` 推送连接和采样日志。
 - **Dashboard**: 订阅 `performance-event`、`incident-event` 与 `stack-event`，呈现会话概览、趋势与事件上下文。
 - **ClickHouse adapter**: 在配置 `PERFORMANCE_CLICKHOUSE_URL` 后将每个性能窗口写入 `performance.performance_windows`。
 
@@ -39,11 +40,13 @@ flowchart LR
 - **PerformanceWindow**: 会话 ID、时间、FPS、刷新率、帧预算、总帧数、卡顿帧数、冻结帧数、平均值、p95、p99、卡顿率。
 - **PerformanceSession**: 会话 ID、设备 ID、包名、刷新率、开始时间、最新窗口、累计指标和最近趋势。
 - **PerformanceIncident**: 会话 ID、严重等级、时间、原因、帧耗时和可选线程堆栈。
+- **DiagnosticEntry**: 日志 ID、时间、等级、事件描述和关联的设备或包名信息。
 
 ## Correctness Properties
 
 - 每个轮询周期仅允许一个 ADB 采集任务运行。
 - 每个轮询周期仅使用当前已连接目标的设备 ID 和包名。
+- 诊断日志按时间倒序保留最近 80 条。
 - 每个性能窗口的卡顿率等于卡顿帧数除以总帧数。
 - 帧预算等于 1000 除以当前刷新率。
 - 分位数从当前窗口的全部有效帧耗时计算。
