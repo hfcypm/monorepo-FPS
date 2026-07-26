@@ -23,38 +23,40 @@ export function parseFrameCosts(raw: string) {
 
 // 兼容旧版 Profile data 和新版 framestats，向采集器返回可诊断的格式与行数信息。
 export function parseFrameStats(raw: string) {
-  const match = raw.match(/Profile data in ms:\n([\s\S]*?)\n\n/);
-  if (match) {
-    const frameCosts = match[1]
-      .trim()
-      .split("\n")
-      .map((line) => line.trim().split(/\s+/).slice(0, 4).map(Number))
-      .filter((parts) => parts.length === 4 && parts.every(Number.isFinite))
-      .map((parts) => parts.reduce((total, value) => total + value, 0))
-      .filter((cost) => cost > 0);
-
-    return { format: "profile" as const, frameCosts, sourceRows: frameCosts.length };
-  }
-
   const marker = raw.indexOf("---PROFILEDATA---");
-  if (marker < 0) return { format: "unknown" as const, frameCosts: [], sourceRows: 0 };
+  if (marker >= 0) {
+    const lines = raw.slice(marker + "---PROFILEDATA---".length).split("\n").map((line) => line.trim()).filter(Boolean);
+    const header = lines.shift()?.split(",").map((column) => column.trim()) ?? [];
+    const intendedVsyncIndex = header.indexOf("IntendedVsync");
+    const frameCompletedIndex = header.indexOf("FrameCompleted");
+    if (intendedVsyncIndex < 0 || frameCompletedIndex < 0) {
+      return { format: "framestats" as const, frameCosts: [], sourceRows: 0 };
+    }
 
-  const lines = raw.slice(marker + "---PROFILEDATA---".length).split("\n").map((line) => line.trim()).filter(Boolean);
-  const header = lines.shift()?.split(",").map((column) => column.trim()) ?? [];
-  const intendedVsyncIndex = header.indexOf("IntendedVsync");
-  const frameCompletedIndex = header.indexOf("FrameCompleted");
-  if (intendedVsyncIndex < 0 || frameCompletedIndex < 0) {
-    return { format: "framestats" as const, frameCosts: [], sourceRows: 0 };
+    // framestats 时间戳以纳秒表示，帧耗时由计划 Vsync 到完成渲染的差值计算。
+    const frameCosts = lines
+      .map((line) => line.split(",").map(Number))
+      .filter((columns) => Number.isFinite(columns[intendedVsyncIndex]) && Number.isFinite(columns[frameCompletedIndex]))
+      .map((columns) => (columns[frameCompletedIndex]! - columns[intendedVsyncIndex]!) / 1_000_000)
+      .filter((cost) => cost > 0 && cost < 60_000);
+
+    return { format: "framestats" as const, frameCosts, sourceRows: lines.length };
   }
 
-  // framestats 时间戳以纳秒表示，帧耗时由计划 Vsync 到完成渲染的差值计算。
-  const frameCosts = lines
-    .map((line) => line.split(",").map(Number))
-    .filter((columns) => Number.isFinite(columns[intendedVsyncIndex]) && Number.isFinite(columns[frameCompletedIndex]))
-    .map((columns) => (columns[frameCompletedIndex]! - columns[intendedVsyncIndex]!) / 1_000_000)
-    .filter((cost) => cost > 0 && cost < 60_000);
+  const match = raw.match(/Profile data in ms:\n([\s\S]*?)\n\n/);
+  if (!match) return { format: "unknown" as const, frameCosts: [], sourceRows: 0 };
 
-  return { format: "framestats" as const, frameCosts, sourceRows: lines.length };
+  // 旧格式仅保留前四列 Draw、Prepare、Process、Execute 的数值行。
+  const sourceRows = match[1]
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).slice(0, 4).map(Number))
+    .filter((parts) => parts.length === 4 && parts.every(Number.isFinite));
+  const frameCosts = sourceRows
+    .map((parts) => parts.reduce((total, value) => total + value, 0))
+    .filter((cost) => cost > 0);
+
+  return { format: "profile" as const, frameCosts, sourceRows: sourceRows.length };
 }
 
 // 仅接受已授权的 device 状态，忽略 offline 和 unauthorized 设备。

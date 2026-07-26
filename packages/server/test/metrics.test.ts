@@ -12,6 +12,11 @@ describe("performance metrics", () => {
     expect(parseFrameStats(raw)).toEqual({ format: "framestats", frameCosts: [16.666667, 33.333333], sourceRows: 2 });
   });
 
+  it("prefers framestats when gfxinfo output also contains an empty legacy profile section", () => {
+    const raw = "Profile data in ms:\nDraw Prepare Process Execute\n\n---PROFILEDATA---\nFlags,IntendedVsync,Vsync,FrameCompleted\n0,1000000000,1001000000,1016666667\n";
+    expect(parseFrameStats(raw)).toEqual({ format: "framestats", frameCosts: [16.666667], sourceRows: 1 });
+  });
+
   it("calculates upper percentiles from sorted copies", () => {
     expect(percentile([20, 10, 40, 30], 0.95)).toBe(40);
   });
