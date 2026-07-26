@@ -33,7 +33,7 @@ type Session = {
   startedAt: string;
   updatedAt: string;
   refreshRate: number;
-  status: "collecting" | "waiting" | "error";
+  status: "collecting" | "waiting" | "stopped" | "error";
   error?: string;
   totals: { frames: number; jankFrames: number; frozenFrames: number };
   windows: PerformanceWindow[];
@@ -60,6 +60,28 @@ const severityLabel: Record<Severity, string> = { normal: "稳定", medium: "关
 function formatTime(value?: string) {
   if (!value) return "--";
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
+// 使用 UTF-8 BOM 和标准 CSV 转义，让中文列名可由 Excel 直接正确识别。
+function exportSessionCsv(session: Session) {
+  const escapeCell = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+  const rows = [
+    ["会话 ID", session.id],
+    ["设备 ID", session.deviceId],
+    ["应用包名", session.packageName],
+    ["开始时间", session.startedAt],
+    ["停止时间", session.updatedAt],
+    [],
+    ["采集时间", "FPS", "刷新率 Hz", "帧预算 ms", "总帧数", "卡顿帧", "冻结帧", "平均帧耗时 ms", "P95 ms", "P99 ms", "卡顿率 %", "风险级别"],
+    ...session.windows.map((window) => [window.timestamp, window.fps, window.refreshRate, window.frameBudgetMs.toFixed(3), window.totalFrames, window.jankFrames, window.frozenFrames, window.averageFrameMs.toFixed(3), window.p95FrameMs.toFixed(3), window.p99FrameMs.toFixed(3), window.jankRate.toFixed(2), severityLabel[window.severity]]),
+  ];
+  const content = `\ufeff${rows.map((row) => row.map(escapeCell).join(",")).join("\r\n")}`;
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `fps-${session.packageName.replaceAll(/[^A-Za-z0-9._-]/g, "_")}-${session.id.slice(0, 8)}.csv`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 function Icon({ name }: { name: "overview" | "pulse" | "devices" | "alerts" | "settings" | "more" | "arrow" }) {
@@ -185,6 +207,7 @@ export default function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   // 采集目标切换后递增版本号，触发 WebSocket Effect 清理旧通道并重新连接。
   const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const [targetConnected, setTargetConnected] = useState(false);
 
   useEffect(() => {
     let socket: WebSocket | undefined;
@@ -309,10 +332,29 @@ export default function App() {
       console.info("[Collector Target] 服务端已确认采集目标", { deviceId: selectedDevice, packageName: selectedPackage });
       setSession(null);
       setTargetMessage(`正在采集 ${selectedPackage}`);
+      setTargetConnected(true);
       setConnectionEpoch((epoch) => epoch + 1);
     } catch (error) {
       console.error("[Collector Target] 采集目标连接失败", { deviceId: selectedDevice, packageName: selectedPackage, error });
       setTargetMessage(error instanceof Error ? error.message : "采集连接失败");
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const stopCollector = async () => {
+    setIsConnecting(true);
+    try {
+      const response = await fetch("/api/collector/stop", { method: "POST" });
+      const payload = await response.json() as { stopped?: boolean; session?: Session | null; error?: string };
+      if (!response.ok || !payload.stopped) throw new Error(payload.error ?? "停止采集失败");
+      if (payload.session) setSession(payload.session);
+      setTargetConnected(false);
+      setTargetMessage(payload.session ? `采集已停止，已保留 ${payload.session.windows.length} 个 FPS 窗口` : "采集目标已停止，尚未产生 FPS 窗口");
+      console.info("[Collector Target] 采集已停止", { sessionId: payload.session?.id, windowCount: payload.session?.windows.length ?? 0 });
+    } catch (error) {
+      console.error("[Collector Target] 停止采集失败", error);
+      setTargetMessage(error instanceof Error ? error.message : "停止采集失败");
     } finally {
       setIsConnecting(false);
     }
@@ -357,12 +399,15 @@ export default function App() {
           <label>第三方应用<select value={selectedPackage} onChange={(event) => setSelectedPackage(event.target.value)} disabled={!selectedDevice}><option value="">选择应用包名</option>{packages.map((packageName) => <option key={packageName} value={packageName}>{packageName}</option>)}</select></label>
           <button className="secondary-button" onClick={() => void refreshDevices()} disabled={isConnecting}>刷新设备</button>
           <button className="connect-button" onClick={() => void connectTarget()} disabled={!selectedDevice || !selectedPackage || isConnecting}>{isConnecting ? "连接中..." : "发起连接"}</button>
+          <button className="secondary-button" onClick={() => void stopCollector()} disabled={!targetConnected || isConnecting}>{isConnecting ? "处理中..." : "停止设备"}</button>
         </section>
 
         <section className="diagnostic-log-panel">
           <div className="diagnostic-log-header"><div><span className="section-kicker">CONNECTION & COLLECTION LOG</span><h2>连接与采集日志</h2></div><span>{diagnostics.length} 条</span></div>
           <div className="diagnostic-log-list">{diagnostics.length ? diagnostics.slice(0, 8).map((entry) => <div className={`diagnostic-entry ${entry.level}`} key={entry.id}><time>{formatTime(entry.timestamp)}</time><b>{entry.message}</b><span>{entry.detail}</span></div>) : <div className="diagnostic-empty">等待连接操作和 ADB 采样结果。</div>}</div>
         </section>
+
+        {session?.status === "stopped" && <section className="panel export-panel"><div className="panel-header"><div><span className="section-kicker">COLLECTION RESULT</span><h2>已停止采集的 FPS 数据</h2></div><button className="secondary-button" onClick={() => exportSessionCsv(session)} disabled={!session.windows.length}>导出 CSV</button></div><div className="table-wrap"><table><thead><tr><th>时间</th><th>FPS</th><th>平均耗时</th><th>P95</th><th>卡顿帧</th><th>风险级别</th></tr></thead><tbody>{session.windows.slice().reverse().map((item) => <tr key={item.timestamp}><td>{formatTime(item.timestamp)}</td><td><b>{item.fps}</b></td><td>{item.averageFrameMs.toFixed(1)}ms</td><td>{item.p95FrameMs.toFixed(1)}ms</td><td>{item.jankFrames}/{item.totalFrames}</td><td><span className={`table-status ${item.severity}`}>{severityLabel[item.severity]}</span></td></tr>)}{!session.windows.length && <tr><td colSpan={6} className="empty-row">本次采集尚未产生 FPS 窗口。</td></tr>}</tbody></table></div></section>}
 
         <section className="session-banner">
           <div className="session-symbol"><Icon name="devices" /></div>

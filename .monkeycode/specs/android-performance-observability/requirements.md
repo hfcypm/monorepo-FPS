@@ -32,7 +32,7 @@
 
 1. WHEN 采集器取得帧耗时, the collector SHALL 按刷新率计算帧预算和卡顿帧。
 2. WHEN 指标窗口结束, the collector SHALL 输出总帧数、卡顿帧数、冻结帧数、平均帧耗时、p95 和 p99 帧耗时。
-3. WHILE 采集会话处于活动状态, the collector SHALL 保留最近 150 个窗口的趋势数据。
+3. WHILE 采集会话处于活动状态, the collector SHALL 保留该会话产生的全部性能窗口，直到用户停止采集。
 
 ### Requirement 3: 企业性能看板
 
@@ -106,3 +106,14 @@
 2. WHEN 采集器接收到 `framestats` 格式数据, the collector SHALL 根据 `IntendedVsync` 与 `FrameCompleted` 计算帧耗时。
 3. WHEN 看板接收性能窗口, the dashboard SHALL 在浏览器控制台记录会话、窗口数量和 FPS。
 4. WHEN 趋势图绘制性能窗口, the dashboard SHALL 在浏览器控制台记录窗口数量和 FPS。
+
+### Requirement 10: 停止采集与 CSV 导出
+
+**User Story:** AS 性能工程师, I want 停止设备采集并导出完整 FPS 数据, so that 可以离线分析一次采集会话。
+
+#### Acceptance Criteria
+
+1. WHEN 用户点击停止设备, the collector SHALL 停止当前设备和包名的后续 ADB 采样。
+2. WHEN 采集停止, the system SHALL 保留该采集会话的全部性能窗口并展示在列表中。
+3. WHEN 用户导出已停止会话, the dashboard SHALL 生成包含会话元数据和全部窗口指标的 UTF-8 CSV 文件。
+4. IF 已停止会话没有性能窗口, the dashboard SHALL 展示空状态并禁用 CSV 导出按钮。

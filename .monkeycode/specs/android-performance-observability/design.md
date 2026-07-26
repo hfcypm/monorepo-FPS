@@ -32,6 +32,7 @@ flowchart LR
 - **Session aggregator**: 计算帧预算、卡顿率、冻结帧、平均值和分位数，保留趋势和风险事件。
 - **Session API**: 提供 `/api/health`、`/api/sessions` 与 `/api/sessions/:id`。
 - **Target API**: 提供 `/api/devices`、`/api/devices/:id/packages` 与 `/api/collector/connect`。
+- **Collection stop API**: 提供 `/api/collector/stop`，停止当前轮询并返回可导出的会话快照。
 - **Diagnostics API**: 提供 `/api/diagnostics`，并通过 `diagnostic-event` 推送连接和采样日志。
 - **Dashboard**: 在采集目标连接成功后重建 WebSocket，订阅事件并在浏览器控制台输出连接、关闭和采集异常诊断信息。
 - **ClickHouse adapter**: 在配置 `PERFORMANCE_CLICKHOUSE_URL` 后将每个性能窗口写入 `performance.performance_windows`。
@@ -48,6 +49,7 @@ flowchart LR
 - 每个轮询周期仅允许一个 ADB 采集任务运行。
 - 每个轮询周期仅使用当前已连接目标的设备 ID 和包名。
 - 诊断日志按时间倒序保留最近 80 条。
+- 活动采集会话保留全部性能窗口，停止后作为结果列表和 CSV 导出数据源。
 - 每个性能窗口的卡顿率等于卡顿帧数除以总帧数。
 - 帧预算等于 1000 除以当前刷新率。
 - 分位数从当前窗口的全部有效帧耗时计算。

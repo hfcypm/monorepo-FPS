@@ -37,7 +37,7 @@ type PerformanceSession = {
   startedAt: string;
   updatedAt: string;
   refreshRate: number;
-  status: "collecting" | "waiting" | "error";
+  status: "collecting" | "waiting" | "stopped" | "error";
   error?: string;
   totals: {
     frames: number;
@@ -74,7 +74,6 @@ for (const directory of ["./logs", "./traces", "./dist"]) {
 }
 
 const SAMPLE_INTERVAL_MS = 1000;
-const MAX_WINDOWS = 150;
 const MAX_INCIDENTS = 30;
 const MAX_DIAGNOSTICS = 80;
 const STACK_CAPTURE_COOLDOWN_MS = 10_000;
@@ -251,8 +250,8 @@ async function collectPerformance() {
     session.totals.frames += totalFrames;
     session.totals.jankFrames += jankFrames;
     session.totals.frozenFrames += frozenFrames;
+    // 当前会话持续保留全部窗口，停止后用于完整列表和 CSV 导出。
     session.windows.push(window);
-    if (session.windows.length > MAX_WINDOWS) session.windows.shift();
     persistWindow(session, window);
     recordDiagnostic({ level: "success", message: "采集窗口已刷新", detail: `${session.deviceId} · ${session.packageName} · ${totalFrames} 帧 · ${window.fps} FPS` });
 
@@ -340,6 +339,28 @@ app.post("/api/collector/connect", async ({ body, set }) => {
   refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
   recordDiagnostic({ level: "success", message: "采集目标已连接", detail: `${target.deviceId} · ${target.packageName}` });
   return { connected: true, target: collectionTarget };
+});
+
+app.post("/api/collector/stop", ({ set }) => {
+  if (!collectionTarget) {
+    recordDiagnostic({ level: "warning", message: "停止采集失败", detail: "当前没有正在采集的设备目标" });
+    set.status = 409;
+    return { error: "当前没有正在采集的设备目标" };
+  }
+
+  // 解除轮询目标并保留当前会话快照，供前端展示完整采集结果和导出文件。
+  const stoppedSession = activeSession;
+  collectionTarget = null;
+  activeSession = null;
+  if (stoppedSession) {
+    stoppedSession.status = "stopped";
+    stoppedSession.updatedAt = new Date().toISOString();
+    recordDiagnostic({ level: "success", message: "采集已停止", detail: `${stoppedSession.deviceId} · ${stoppedSession.packageName} · 已保留 ${stoppedSession.windows.length} 个窗口` });
+  } else {
+    recordDiagnostic({ level: "success", message: "采集目标已停止", detail: "目标尚未产生性能窗口" });
+  }
+
+  return { stopped: true, session: stoppedSession };
 });
 
 // 会话和诊断接口支持页面首次加载时恢复实时状态。
