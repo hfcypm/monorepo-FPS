@@ -53,8 +53,10 @@ type DiagnosticEntry = {
   detail?: string;
 };
 
+// 服务端风险枚举映射为看板可读状态。
 const severityLabel: Record<Severity, string> = { normal: "稳定", medium: "关注", high: "高风险", critical: "严重" };
 
+// 统一输出看板内的本地化时分秒格式。
 function formatTime(value?: string) {
   if (!value) return "--";
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
@@ -76,6 +78,7 @@ function Icon({ name }: { name: "overview" | "pulse" | "devices" | "alerts" | "s
 function TrendChart({ windows, refreshRate }: { windows: PerformanceWindow[]; refreshRate: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // 绘制日志与 WebSocket 日志共同定位 FPS 数据停留的链路阶段。
   useEffect(() => {
     const latest = windows.at(-1);
     if (latest) console.info("[FPS Render] 已绘制 FPS 趋势窗口", { windowCount: windows.length, fps: latest.fps, timestamp: latest.timestamp });
@@ -86,6 +89,7 @@ function TrendChart({ windows, refreshRate }: { windows: PerformanceWindow[]; re
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
 
+    // 根据 CSS 尺寸和设备像素比重建画布，保持高分屏下的趋势线清晰。
     const draw = () => {
       const rect = canvas.getBoundingClientRect();
       const ratio = window.devicePixelRatio || 1;
@@ -114,6 +118,7 @@ function TrendChart({ windows, refreshRate }: { windows: PerformanceWindow[]; re
         context.fillText(`${Math.round(maxValue * ratioValue)}`, 5, lineY + 4);
       }
 
+      // 空窗口时保留可解释的占位状态，避免用户误认为图表组件失效。
       if (windows.length === 0) {
         context.fillStyle = "#97a3b6";
         context.fillText("等待 ADB 采集到前台应用的帧数据", padding.left, height / 2);
@@ -179,12 +184,14 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [targetMessage, setTargetMessage] = useState("刷新设备列表后选择诊断目标");
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
+  // 采集目标切换后递增版本号，触发 WebSocket Effect 清理旧通道并重新连接。
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   useEffect(() => {
     let socket: WebSocket | undefined;
     let retryTimer: number | undefined;
     let disposed = false;
+    // WebSocket 建立前先恢复已有会话和诊断记录，缩短页面首屏空白时间。
     const loadSession = async () => {
       try {
         const response = await fetch("/api/sessions");
@@ -200,6 +207,7 @@ export default function App() {
       } catch { /* WebSocket reconnect supplies diagnostics. */ }
     };
     const connect = () => {
+      // 本地开发绕开 Vite WebSocket 代理，部署环境保持同源连接。
       const socketOrigin = import.meta.env.DEV
         ? "ws://localhost:3001"
         : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
@@ -213,6 +221,7 @@ export default function App() {
       };
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string; entry?: DiagnosticEntry; entries?: DiagnosticEntry[] };
+        // 性能事件携带完整会话快照，可一次更新全部指标和趋势数据。
         if (payload.event === "performance" && payload.session) {
           const latest = payload.session.windows.at(-1);
           console.info("[FPS WebSocket] 已接收性能窗口", { sessionId: payload.session.id, windowCount: payload.session.windows.length, fps: latest?.fps });
@@ -224,6 +233,7 @@ export default function App() {
           setCollectorMessage(payload.message ?? "采集器异常");
         }
         if (payload.event === "diagnostics" && payload.entries) setDiagnostics(payload.entries);
+        // 将服务端诊断等级映射为对应控制台级别，便于按异常筛选。
         if (payload.event === "diagnostic" && payload.entry) {
           const { entry } = payload;
           console[entry.level === "error" ? "error" : entry.level === "warning" ? "warn" : "info"]("[Collector Diagnostic]", entry.message, entry.detail ?? "");
@@ -241,9 +251,11 @@ export default function App() {
     void loadSession();
     void loadDiagnostics();
     connect();
+    // 切换采集目标或卸载页面时取消重试，避免旧连接覆盖新连接状态。
     return () => { disposed = true; if (retryTimer) window.clearTimeout(retryTimer); socket?.close(); };
   }, [connectionEpoch]);
 
+  // 刷新设备列表后保留仍可用的选择，失效时默认选择首个设备。
   const refreshDevices = async () => {
     try {
       const response = await fetch("/api/devices");
@@ -260,6 +272,7 @@ export default function App() {
 
   useEffect(() => { void refreshDevices(); }, []);
 
+  // 设备变化后加载对应第三方应用列表，并清空已失效的包名选择。
   useEffect(() => {
     if (!selectedDevice) {
       setPackages([]);
@@ -283,6 +296,7 @@ export default function App() {
     void loadPackages();
   }, [selectedDevice]);
 
+  // 服务端确认采集目标后，清空旧会话并触发新的实时连接。
   const connectTarget = async () => {
     if (!selectedDevice || !selectedPackage) return;
     setIsConnecting(true);

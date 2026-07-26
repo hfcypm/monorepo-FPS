@@ -66,6 +66,7 @@ type DiagnosticEntry = {
   detail?: string;
 };
 
+// 同时提供构建后的看板静态资源和 ADB 采集 API。
 const app = new Elysia().use(staticPlugin({ assets: "dist", prefix: "/" }));
 
 for (const directory of ["./logs", "./traces", "./dist"]) {
@@ -85,8 +86,10 @@ let collecting = false;
 let lastStackCaptureAt = 0;
 let refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
 let collectionTarget: CollectionTarget | null = null;
+// 内存保留最近的诊断事件，供新连接的看板立即回放。
 const diagnostics: DiagnosticEntry[] = [];
 
+// 连续相同日志只保留一条，避免每秒轮询淹没诊断面板和浏览器控制台。
 function recordDiagnostic(entry: Omit<DiagnosticEntry, "id" | "timestamp">) {
   const latest = diagnostics[0];
   if (latest?.level === entry.level && latest.message === entry.message && latest.detail === entry.detail) return;
@@ -97,20 +100,24 @@ function recordDiagnostic(entry: Omit<DiagnosticEntry, "id" | "timestamp">) {
   app.server?.publish("diagnostic-event", JSON.stringify({ event: "diagnostic", entry: diagnostic }));
 }
 
+// 设备 ID 与包名会进入 ADB 命令，只允许安全字符避免拼接命令时产生歧义。
 function validAdbIdentifier(value: unknown) {
   return typeof value === "string" && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
+// 从本机 ADB 查询已授权设备，采集服务需要运行在设备连接的同一台电脑上。
 async function listDevices(): Promise<AdbDevice[]> {
   const text = await $`${adbPath} devices -l`.text();
   return parseConnectedDevices(text);
 }
 
+// 仅枚举用户安装的第三方应用，降低目标选择列表的系统包噪声。
 async function listPackages(deviceId: string) {
   const text = await $`${adbPath} -s ${deviceId} shell pm list packages -3`.text();
   return parseThirdPartyPackages(text);
 }
 
+// 刷新率读取成本较高，按设备缓存 30 秒作为帧预算的输入。
 async function getRefreshRate(deviceId: string) {
   const now = Date.now();
   if (refreshRateCache.deviceId === deviceId && now - refreshRateCache.updatedAt < 30_000) return refreshRateCache.value;
@@ -128,6 +135,7 @@ async function getRefreshRate(deviceId: string) {
   return refreshRateCache.value;
 }
 
+// 相同设备与包名复用当前会话；切换目标时重置 gfxinfo 基线避免混入历史帧。
 async function ensureSession(target: CollectionTarget, refreshRate: number) {
   if (activeSession?.packageName === target.packageName && activeSession.deviceId === target.deviceId) {
     activeSession.refreshRate = refreshRate;
@@ -152,6 +160,7 @@ async function ensureSession(target: CollectionTarget, refreshRate: number) {
   return activeSession;
 }
 
+// 高风险窗口触发主线程快照，并通过冷却时间限制 ADB 调用频率。
 async function captureMainStack(session: PerformanceSession, incident: PerformanceIncident) {
   if (Date.now() - lastStackCaptureAt < STACK_CAPTURE_COOLDOWN_MS) return;
   lastStackCaptureAt = Date.now();
@@ -169,6 +178,7 @@ async function captureMainStack(session: PerformanceSession, incident: Performan
   }
 }
 
+// 持久化失败不会中断实时采集，错误仅写入服务端控制台。
 function persistWindow(session: PerformanceSession, window: PerformanceWindow) {
   void persistPerformanceWindow({
     sessionId: session.id,
@@ -179,6 +189,7 @@ function persistWindow(session: PerformanceSession, window: PerformanceWindow) {
 }
 
 async function collectPerformance() {
+  // 轮询间隔可能短于 ADB 命令耗时，锁保证同一时刻只执行一次采集。
   if (collecting) return;
   collecting = true;
 
@@ -196,11 +207,13 @@ async function collectPerformance() {
 
     const refreshRate = await getRefreshRate(collectionTarget.deviceId);
     const session = await ensureSession(collectionTarget, refreshRate);
+    // 每次读取后重置 gfxinfo，仅聚合本轮采样周期内新增的帧。
     const raw = await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} framestats`.text();
     const frameStats = parseFrameStats(raw);
     const frameCosts = frameStats.frameCosts;
     await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} reset`.quiet();
 
+    // 原始输出和解析计数用于区分 ADB 采集失败、格式不兼容与应用无绘制帧。
     recordDiagnostic({ level: "info", message: "帧数据解析完成", detail: `${frameStats.format} · 原始输出 ${raw.length} 字符 · 数据行 ${frameStats.sourceRows} · 有效帧 ${frameCosts.length}` });
 
     if (frameCosts.length === 0) {
@@ -208,6 +221,7 @@ async function collectPerformance() {
       return;
     }
 
+    // 将单帧耗时聚合为窗口指标，供实时看板和风险规则共同消费。
     const frameBudgetMs = 1000 / refreshRate;
     const totalFrames = frameCosts.length;
     const jankFrames = frameCosts.filter((cost) => cost > frameBudgetMs).length;
@@ -256,6 +270,7 @@ async function collectPerformance() {
       void captureMainStack(session, incident);
     }
 
+    // 发布完整会话快照，前端据此更新指标、趋势和风险事件。
     app.server?.publish("performance-event", JSON.stringify({ event: "performance", session }));
   } catch (error) {
     const message = error instanceof Error ? error.message : "采集器发生未知错误";
@@ -274,6 +289,7 @@ async function collectPerformance() {
   }
 }
 
+// 健康接口暴露当前采集目标和会话状态，便于本地连通性排查。
 app.get("/api/health", () => ({
   status: activeSession?.status ?? "waiting",
   collecting,
@@ -282,6 +298,7 @@ app.get("/api/health", () => ({
   clickHouse: isClickHouseConfigured() ? "configured" : "memory",
 }));
 
+// 设备与包名接口为看板的目标选择器提供数据。
 app.get("/api/devices", async () => {
   const devices = await listDevices();
   recordDiagnostic({ level: "info", message: "已扫描 ADB 设备", detail: `发现 ${devices.length} 个已授权设备` });
@@ -325,6 +342,7 @@ app.post("/api/collector/connect", async ({ body, set }) => {
   return { connected: true, target: collectionTarget };
 });
 
+// 会话和诊断接口支持页面首次加载时恢复实时状态。
 app.get("/api/sessions", () => ({ activeSession, sessions: [...sessions.values()] }));
 
 app.get("/api/diagnostics", () => ({ entries: diagnostics }));
@@ -335,6 +353,7 @@ app.get("/api/sessions/:id", ({ params }) => (
 
 app.ws("/ws", {
   open(ws) {
+    // 新客户端订阅所有实时主题，并先接收内存中的当前快照。
     ws.subscribe("performance-event");
     ws.subscribe("incident-event");
     ws.subscribe("stack-event");
@@ -345,6 +364,7 @@ app.ws("/ws", {
   },
 });
 
+// 服务启动后立即尝试一次，并按固定间隔持续采集当前目标。
 setInterval(() => void collectPerformance(), SAMPLE_INTERVAL_MS);
 void collectPerformance();
 

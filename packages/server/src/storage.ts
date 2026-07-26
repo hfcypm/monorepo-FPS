@@ -16,6 +16,7 @@ export type PerformanceRecord = {
   severity: string;
 };
 
+// 将可选的 ClickHouse 配置集中读取，未配置时采集流程继续使用内存会话。
 function configuration() {
   const url = process.env.PERFORMANCE_CLICKHOUSE_URL?.replace(/\/$/, "");
   return url ? {
@@ -34,6 +35,7 @@ export async function persistPerformanceWindow(record: PerformanceRecord) {
   const config = configuration();
   if (!config) return;
 
+  // 使用 JSONEachRow 直接写入单个性能窗口，避免在采集热路径维护批处理状态。
   const query = `INSERT INTO ${config.database}.performance_windows FORMAT JSONEachRow`;
   const response = await fetch(`${config.url}/?query=${encodeURIComponent(query)}`, {
     method: "POST",
