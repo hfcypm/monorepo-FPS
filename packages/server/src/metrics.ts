@@ -15,16 +15,41 @@ export function classifyWindow(jankRate: number, frozenFrames: number): Severity
 }
 
 export function parseFrameCosts(raw: string) {
-  const match = raw.match(/Profile data in ms:\n([\s\S]*?)\n\n/);
-  if (!match) return [];
+  return parseFrameStats(raw).frameCosts;
+}
 
-  return match[1]
-    .trim()
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/).slice(0, 4).map(Number))
-    .filter((parts) => parts.length === 4 && parts.every(Number.isFinite))
-    .map((parts) => parts.reduce((total, value) => total + value, 0))
-    .filter((cost) => cost > 0);
+export function parseFrameStats(raw: string) {
+  const match = raw.match(/Profile data in ms:\n([\s\S]*?)\n\n/);
+  if (match) {
+    const frameCosts = match[1]
+      .trim()
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/).slice(0, 4).map(Number))
+      .filter((parts) => parts.length === 4 && parts.every(Number.isFinite))
+      .map((parts) => parts.reduce((total, value) => total + value, 0))
+      .filter((cost) => cost > 0);
+
+    return { format: "profile" as const, frameCosts, sourceRows: frameCosts.length };
+  }
+
+  const marker = raw.indexOf("---PROFILEDATA---");
+  if (marker < 0) return { format: "unknown" as const, frameCosts: [], sourceRows: 0 };
+
+  const lines = raw.slice(marker + "---PROFILEDATA---".length).split("\n").map((line) => line.trim()).filter(Boolean);
+  const header = lines.shift()?.split(",").map((column) => column.trim()) ?? [];
+  const intendedVsyncIndex = header.indexOf("IntendedVsync");
+  const frameCompletedIndex = header.indexOf("FrameCompleted");
+  if (intendedVsyncIndex < 0 || frameCompletedIndex < 0) {
+    return { format: "framestats" as const, frameCosts: [], sourceRows: 0 };
+  }
+
+  const frameCosts = lines
+    .map((line) => line.split(",").map(Number))
+    .filter((columns) => Number.isFinite(columns[intendedVsyncIndex]) && Number.isFinite(columns[frameCompletedIndex]))
+    .map((columns) => (columns[frameCompletedIndex]! - columns[intendedVsyncIndex]!) / 1_000_000)
+    .filter((cost) => cost > 0 && cost < 60_000);
+
+  return { format: "framestats" as const, frameCosts, sourceRows: lines.length };
 }
 
 export function parseConnectedDevices(raw: string) {

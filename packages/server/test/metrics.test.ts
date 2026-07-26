@@ -1,10 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { classifyWindow, parseConnectedDevices, parseFrameCosts, parseThirdPartyPackages, percentile } from "../src/metrics";
+import { classifyWindow, parseConnectedDevices, parseFrameCosts, parseFrameStats, parseThirdPartyPackages, percentile } from "../src/metrics";
 
 describe("performance metrics", () => {
   it("parses valid gfxinfo profile rows", () => {
     const raw = "Profile data in ms:\nDraw Prepare Process Execute\n1 2 3 4\n5 6 7 8\n\n";
     expect(parseFrameCosts(raw)).toEqual([10, 26]);
+  });
+
+  it("parses framestats rows using intended and completed vsync timestamps", () => {
+    const raw = "---PROFILEDATA---\nFlags,IntendedVsync,Vsync,FrameCompleted\n0,1000000000,1001000000,1016666667\n0,2000000000,2001000000,2033333333\n";
+    expect(parseFrameStats(raw)).toEqual({ format: "framestats", frameCosts: [16.666667, 33.333333], sourceRows: 2 });
   });
 
   it("calculates upper percentiles from sorted copies", () => {

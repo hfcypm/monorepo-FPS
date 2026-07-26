@@ -95,3 +95,14 @@
 1. WHEN 用户成功连接设备和包名, the dashboard SHALL 关闭当前 WebSocket 并创建新的 WebSocket 连接。
 2. WHEN WebSocket 建立成功, the dashboard SHALL 在浏览器控制台记录连接地址和成功状态。
 3. IF WebSocket 建立失败、关闭或接收到采集器错误事件, the dashboard SHALL 在浏览器控制台记录错误详情和连接地址。
+
+### Requirement 9: FPS 数据链路定位
+
+**User Story:** AS 性能工程师, I want 区分 ADB 采集、WebSocket 推送和趋势绘制阶段, so that 可以定位 FPS 数据缺失的位置。
+
+#### Acceptance Criteria
+
+1. WHEN 采集器解析 `dumpsys gfxinfo` 输出, the collector SHALL 记录输出格式、原始字符数、数据行数和有效帧数。
+2. WHEN 采集器接收到 `framestats` 格式数据, the collector SHALL 根据 `IntendedVsync` 与 `FrameCompleted` 计算帧耗时。
+3. WHEN 看板接收性能窗口, the dashboard SHALL 在浏览器控制台记录会话、窗口数量和 FPS。
+4. WHEN 趋势图绘制性能窗口, the dashboard SHALL 在浏览器控制台记录窗口数量和 FPS。

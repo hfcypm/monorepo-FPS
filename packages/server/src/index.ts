@@ -3,7 +3,7 @@ import { staticPlugin } from "@elysiajs/static";
 import { $ } from "bun";
 import { existsSync, mkdirSync } from "fs";
 import { randomUUID } from "crypto";
-import { classifyWindow, parseConnectedDevices, parseFrameCosts, parseThirdPartyPackages, percentile, type Severity } from "./metrics";
+import { classifyWindow, parseConnectedDevices, parseFrameStats, parseThirdPartyPackages, percentile, type Severity } from "./metrics";
 import { isClickHouseConfigured, persistPerformanceWindow } from "./storage";
 
 type PerformanceWindow = {
@@ -197,11 +197,14 @@ async function collectPerformance() {
     const refreshRate = await getRefreshRate(collectionTarget.deviceId);
     const session = await ensureSession(collectionTarget, refreshRate);
     const raw = await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} framestats`.text();
-    const frameCosts = parseFrameCosts(raw);
+    const frameStats = parseFrameStats(raw);
+    const frameCosts = frameStats.frameCosts;
     await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} reset`.quiet();
 
+    recordDiagnostic({ level: "info", message: "帧数据解析完成", detail: `${frameStats.format} · 原始输出 ${raw.length} 字符 · 数据行 ${frameStats.sourceRows} · 有效帧 ${frameCosts.length}` });
+
     if (frameCosts.length === 0) {
-      recordDiagnostic({ level: "warning", message: "未读取到帧数据", detail: `${collectionTarget.deviceId} · ${collectionTarget.packageName}，请打开应用并进行界面操作` });
+      recordDiagnostic({ level: "warning", message: "未读取到帧数据", detail: `${collectionTarget.deviceId} · ${collectionTarget.packageName} · 格式 ${frameStats.format}，请打开应用并进行界面操作` });
       return;
     }
 

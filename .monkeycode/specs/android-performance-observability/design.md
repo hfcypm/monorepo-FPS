@@ -28,6 +28,7 @@ flowchart LR
 - **ADB device discovery**: 查询已连接设备及每个设备的第三方应用包名。
 - **Target selector**: 校验并保存用户选择的设备和包名，作为采集目标。
 - **ADB collector**: 以单次串行轮询采集选中设备、选中包名的刷新率和 `gfxinfo` 帧数据。
+- **Frame data parser**: 同时解析旧版 `Profile data in ms` 与 `framestats` 的 `---PROFILEDATA---` 数据，并记录格式、数据行与有效帧计数。
 - **Session aggregator**: 计算帧预算、卡顿率、冻结帧、平均值和分位数，保留趋势和风险事件。
 - **Session API**: 提供 `/api/health`、`/api/sessions` 与 `/api/sessions/:id`。
 - **Target API**: 提供 `/api/devices`、`/api/devices/:id/packages` 与 `/api/collector/connect`。

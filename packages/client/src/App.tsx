@@ -77,6 +77,11 @@ function TrendChart({ windows, refreshRate }: { windows: PerformanceWindow[]; re
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
+    const latest = windows.at(-1);
+    if (latest) console.info("[FPS Render] 已绘制 FPS 趋势窗口", { windowCount: windows.length, fps: latest.fps, timestamp: latest.timestamp });
+  }, [windows]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
@@ -208,7 +213,11 @@ export default function App() {
       };
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string; entry?: DiagnosticEntry; entries?: DiagnosticEntry[] };
-        if (payload.event === "performance" && payload.session) setSession(payload.session);
+        if (payload.event === "performance" && payload.session) {
+          const latest = payload.session.windows.at(-1);
+          console.info("[FPS WebSocket] 已接收性能窗口", { sessionId: payload.session.id, windowCount: payload.session.windows.length, fps: latest?.fps });
+          setSession(payload.session);
+        }
         if ((payload.event === "incident" || payload.event === "stack") && payload.incident) setSelectedIncident(payload.incident);
         if (payload.event === "collector-error") {
           console.error("[Collector WebSocket] 服务端采集异常", payload.message ?? "采集器异常");
