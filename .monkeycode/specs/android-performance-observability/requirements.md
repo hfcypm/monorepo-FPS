@@ -53,3 +53,24 @@
 1. WHEN 指标窗口包含冻结帧或严重卡顿, the collector SHALL 发布风险事件。
 2. WHEN 风险事件满足采集冷却条件, the collector SHALL 请求主线程堆栈并关联当前会话。
 3. IF 主线程堆栈采集失败, the collector SHALL 保留风险事件和失败状态。
+
+### Requirement 5: 设备与应用选择
+
+**User Story:** AS 性能工程师, I want 在看板中选择已连接设备和目标应用, so that 性能数据归属到明确的诊断对象。
+
+#### Acceptance Criteria
+
+1. WHEN 用户打开看板, the dashboard SHALL 展示 ADB 状态为 `device` 的设备列表。
+2. WHEN 用户选择设备, the dashboard SHALL 展示该设备中第三方应用的包名列表。
+3. WHEN 用户选择设备和包名并发起连接, the collector SHALL 创建针对该设备和包名的采集会话。
+4. IF 设备状态不为 `device` 或包名不属于所选设备, the system SHALL 返回可操作的连接错误信息。
+
+### Requirement 6: 显式目标采集
+
+**User Story:** AS 性能工程师, I want 持续采集已连接目标的性能窗口, so that 看板展示的数据与选择内容一致。
+
+#### Acceptance Criteria
+
+1. WHILE 连接目标处于可用状态, the collector SHALL 仅从选中设备和包名读取帧统计。
+2. WHEN 用户连接新的设备或包名, the collector SHALL 创建新的采集会话并更新看板会话信息。
+3. WHEN 连接目标不可用, the collector SHALL 将会话状态更新为 `error` 并保留最近有效窗口。

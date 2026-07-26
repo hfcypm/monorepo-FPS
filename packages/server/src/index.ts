@@ -3,7 +3,7 @@ import { staticPlugin } from "@elysiajs/static";
 import { $ } from "bun";
 import { existsSync, mkdirSync } from "fs";
 import { randomUUID } from "crypto";
-import { classifyWindow, parseFrameCosts, percentile, type Severity } from "./metrics";
+import { classifyWindow, parseConnectedDevices, parseFrameCosts, parseThirdPartyPackages, percentile, type Severity } from "./metrics";
 import { isClickHouseConfigured, persistPerformanceWindow } from "./storage";
 
 type PerformanceWindow = {
@@ -48,6 +48,16 @@ type PerformanceSession = {
   incidents: PerformanceIncident[];
 };
 
+type AdbDevice = {
+  id: string;
+  model: string;
+};
+
+type CollectionTarget = {
+  deviceId: string;
+  packageName: string;
+};
+
 const app = new Elysia().use(staticPlugin({ assets: "dist", prefix: "/" }));
 
 for (const directory of ["./logs", "./traces", "./dist"]) {
@@ -64,31 +74,32 @@ let activeSession: PerformanceSession | null = null;
 const sessions = new Map<string, PerformanceSession>();
 let collecting = false;
 let lastStackCaptureAt = 0;
-let refreshRateCache = { value: 60, updatedAt: 0 };
+let refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
+let collectionTarget: CollectionTarget | null = null;
 
-async function getForegroundPackage() {
-  const text = await $`${adbPath} shell dumpsys window`.text();
-  return text.match(/mCurrentFocus.*?([\w.]+)\//)?.[1] ?? null;
+function validAdbIdentifier(value: unknown) {
+  return typeof value === "string" && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
-async function getDeviceId() {
-  try {
-    const deviceId = (await $`${adbPath} get-serialno`.text()).trim();
-    return deviceId || "adb-device";
-  } catch {
-    return "adb-device";
-  }
+async function listDevices(): Promise<AdbDevice[]> {
+  const text = await $`${adbPath} devices -l`.text();
+  return parseConnectedDevices(text);
 }
 
-async function getRefreshRate() {
+async function listPackages(deviceId: string) {
+  const text = await $`${adbPath} -s ${deviceId} shell pm list packages -3`.text();
+  return parseThirdPartyPackages(text);
+}
+
+async function getRefreshRate(deviceId: string) {
   const now = Date.now();
-  if (now - refreshRateCache.updatedAt < 30_000) return refreshRateCache.value;
+  if (refreshRateCache.deviceId === deviceId && now - refreshRateCache.updatedAt < 30_000) return refreshRateCache.value;
 
   try {
-    const text = await $`${adbPath} shell settings get system peak_refresh_rate`.text();
+    const text = await $`${adbPath} -s ${deviceId} shell settings get system peak_refresh_rate`.text();
     const refreshRate = Number.parseFloat(text);
     if (Number.isFinite(refreshRate) && refreshRate >= 30 && refreshRate <= 240) {
-      refreshRateCache = { value: refreshRate, updatedAt: now };
+      refreshRateCache = { deviceId, value: refreshRate, updatedAt: now };
     }
   } catch {
     refreshRateCache.updatedAt = now;
@@ -97,16 +108,16 @@ async function getRefreshRate() {
   return refreshRateCache.value;
 }
 
-async function ensureSession(packageName: string, refreshRate: number) {
-  if (activeSession?.packageName === packageName) {
+async function ensureSession(target: CollectionTarget, refreshRate: number) {
+  if (activeSession?.packageName === target.packageName && activeSession.deviceId === target.deviceId) {
     activeSession.refreshRate = refreshRate;
     return activeSession;
   }
 
   activeSession = {
     id: randomUUID(),
-    deviceId: await getDeviceId(),
-    packageName,
+    deviceId: target.deviceId,
+    packageName: target.packageName,
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     refreshRate,
@@ -117,7 +128,7 @@ async function ensureSession(packageName: string, refreshRate: number) {
   };
   sessions.set(activeSession.id, activeSession);
 
-  await $`${adbPath} shell dumpsys gfxinfo ${packageName} reset`.quiet();
+  await $`${adbPath} -s ${target.deviceId} shell dumpsys gfxinfo ${target.packageName} reset`.quiet();
   return activeSession;
 }
 
@@ -126,10 +137,10 @@ async function captureMainStack(session: PerformanceSession, incident: Performan
   lastStackCaptureAt = Date.now();
 
   try {
-    const pid = (await $`${adbPath} shell pidof ${session.packageName}`.text()).trim();
+    const pid = (await $`${adbPath} -s ${session.deviceId} shell pidof ${session.packageName}`.text()).trim();
     if (!pid) throw new Error("未获取到应用进程");
 
-    const stack = await $`${adbPath} shell dumpsys thread ${pid} main`.text();
+    const stack = await $`${adbPath} -s ${session.deviceId} shell dumpsys thread ${pid} main`.text();
     incident.stack = stack.substring(0, 7000);
     app.server?.publish("stack-event", JSON.stringify({ event: "stack", sessionId: session.id, incident }));
   } catch (error) {
@@ -151,17 +162,21 @@ async function collectPerformance() {
   collecting = true;
 
   try {
-    const packageName = await getForegroundPackage();
-    if (!packageName) {
+    if (!collectionTarget) {
       if (activeSession) activeSession.status = "waiting";
       return;
     }
 
-    const refreshRate = await getRefreshRate();
-    const session = await ensureSession(packageName, refreshRate);
-    const raw = await $`${adbPath} shell dumpsys gfxinfo ${packageName} framestats`.text();
+    const devices = await listDevices();
+    if (!devices.some((device) => device.id === collectionTarget?.deviceId)) {
+      throw new Error("所选设备当前未处于 ADB 已连接状态");
+    }
+
+    const refreshRate = await getRefreshRate(collectionTarget.deviceId);
+    const session = await ensureSession(collectionTarget, refreshRate);
+    const raw = await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} framestats`.text();
     const frameCosts = parseFrameCosts(raw);
-    await $`${adbPath} shell dumpsys gfxinfo ${packageName} reset`.quiet();
+    await $`${adbPath} -s ${collectionTarget.deviceId} shell dumpsys gfxinfo ${collectionTarget.packageName} reset`.quiet();
 
     if (frameCosts.length === 0) return;
 
@@ -232,8 +247,41 @@ app.get("/api/health", () => ({
   status: activeSession?.status ?? "waiting",
   collecting,
   activeSessionId: activeSession?.id ?? null,
+  target: collectionTarget,
   clickHouse: isClickHouseConfigured() ? "configured" : "memory",
 }));
+
+app.get("/api/devices", async () => ({ devices: await listDevices() }));
+
+app.get("/api/devices/:id/packages", async ({ params, set }) => {
+  const deviceId = decodeURIComponent(params.id);
+  if (!validAdbIdentifier(deviceId) || !(await listDevices()).some((device) => device.id === deviceId)) {
+    set.status = 404;
+    return { error: "设备当前不可用" };
+  }
+  return { packages: await listPackages(deviceId) };
+});
+
+app.post("/api/collector/connect", async ({ body, set }) => {
+  const target = body as Partial<CollectionTarget>;
+  if (!validAdbIdentifier(target.deviceId) || !validAdbIdentifier(target.packageName)) {
+    set.status = 400;
+    return { error: "设备或包名格式无效" };
+  }
+  if (!(await listDevices()).some((device) => device.id === target.deviceId)) {
+    set.status = 404;
+    return { error: "设备当前不可用，请刷新设备列表" };
+  }
+  if (!(await listPackages(target.deviceId)).includes(target.packageName)) {
+    set.status = 404;
+    return { error: "包名不属于所选设备的第三方应用" };
+  }
+
+  collectionTarget = { deviceId: target.deviceId, packageName: target.packageName };
+  activeSession = null;
+  refreshRateCache = { deviceId: "", value: 60, updatedAt: 0 };
+  return { connected: true, target: collectionTarget };
+});
 
 app.get("/api/sessions", () => ({ activeSession, sessions: [...sessions.values()] }));
 

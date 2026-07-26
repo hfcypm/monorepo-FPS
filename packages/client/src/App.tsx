@@ -40,6 +40,11 @@ type Session = {
   incidents: Incident[];
 };
 
+type Device = {
+  id: string;
+  model: string;
+};
+
 const severityLabel: Record<Severity, string> = { normal: "稳定", medium: "关注", high: "高风险", critical: "严重" };
 
 function formatTime(value?: string) {
@@ -154,6 +159,12 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [collectorMessage, setCollectorMessage] = useState("等待本地采集器连接");
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [packages, setPackages] = useState<string[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState("");
+  const [selectedPackage, setSelectedPackage] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [targetMessage, setTargetMessage] = useState("刷新设备列表后选择诊断目标");
 
   useEffect(() => {
     let socket: WebSocket | undefined;
@@ -181,6 +192,65 @@ export default function App() {
     connect();
     return () => { disposed = true; if (retryTimer) window.clearTimeout(retryTimer); socket?.close(); };
   }, []);
+
+  const refreshDevices = async () => {
+    try {
+      const response = await fetch("/api/devices");
+      const payload = await response.json() as { devices?: Device[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "设备列表加载失败");
+      const availableDevices = payload.devices ?? [];
+      setDevices(availableDevices);
+      setSelectedDevice((current) => availableDevices.some((device) => device.id === current) ? current : (availableDevices[0]?.id ?? ""));
+      setTargetMessage(availableDevices.length ? "请选择应用包名并发起连接" : "未发现 ADB 已授权设备");
+    } catch (error) {
+      setTargetMessage(error instanceof Error ? error.message : "设备列表加载失败");
+    }
+  };
+
+  useEffect(() => { void refreshDevices(); }, []);
+
+  useEffect(() => {
+    if (!selectedDevice) {
+      setPackages([]);
+      setSelectedPackage("");
+      return;
+    }
+    const loadPackages = async () => {
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(selectedDevice)}/packages`);
+        const payload = await response.json() as { packages?: string[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "包名列表加载失败");
+        const availablePackages = payload.packages ?? [];
+        setPackages(availablePackages);
+        setSelectedPackage((current) => availablePackages.includes(current) ? current : (availablePackages[0] ?? ""));
+      } catch (error) {
+        setPackages([]);
+        setSelectedPackage("");
+        setTargetMessage(error instanceof Error ? error.message : "包名列表加载失败");
+      }
+    };
+    void loadPackages();
+  }, [selectedDevice]);
+
+  const connectTarget = async () => {
+    if (!selectedDevice || !selectedPackage) return;
+    setIsConnecting(true);
+    try {
+      const response = await fetch("/api/collector/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId: selectedDevice, packageName: selectedPackage }),
+      });
+      const payload = await response.json() as { connected?: boolean; error?: string };
+      if (!response.ok || !payload.connected) throw new Error(payload.error ?? "采集连接失败");
+      setSession(null);
+      setTargetMessage(`正在采集 ${selectedPackage}`);
+    } catch (error) {
+      setTargetMessage(error instanceof Error ? error.message : "采集连接失败");
+    } finally {
+      setIsConnecting(false);
+    }
+  };
 
   const latest = session?.windows.at(-1);
   const totalFrames = session?.totals.frames ?? 0;
@@ -213,6 +283,14 @@ export default function App() {
         <section className="page-heading">
           <div><p className="eyebrow">ANDROID PERFORMANCE OBSERVABILITY</p><h1>实时性能概览</h1><p>以当前设备为中心，持续识别帧率波动和高风险渲染窗口。</p></div>
           <div className="updated"><span>最后更新</span><b>{session ? formatTime(session.updatedAt) : collectorMessage}</b></div>
+        </section>
+
+        <section className="connection-panel">
+          <div className="connection-copy"><span className="section-kicker">COLLECTION TARGET</span><b>连接设备与应用</b><small>{targetMessage}</small></div>
+          <label>设备<select value={selectedDevice} onChange={(event) => setSelectedDevice(event.target.value)}><option value="">选择已连接设备</option>{devices.map((item) => <option key={item.id} value={item.id}>{item.model} · {item.id}</option>)}</select></label>
+          <label>第三方应用<select value={selectedPackage} onChange={(event) => setSelectedPackage(event.target.value)} disabled={!selectedDevice}><option value="">选择应用包名</option>{packages.map((packageName) => <option key={packageName} value={packageName}>{packageName}</option>)}</select></label>
+          <button className="secondary-button" onClick={() => void refreshDevices()} disabled={isConnecting}>刷新设备</button>
+          <button className="connect-button" onClick={() => void connectTarget()} disabled={!selectedDevice || !selectedPackage || isConnecting}>{isConnecting ? "连接中..." : "发起连接"}</button>
         </section>
 
         <section className="session-banner">

@@ -1,18 +1,19 @@
 # Android Performance Observability
 
 Feature Name: android-performance-observability
-Updated: 2026-07-25
+Updated: 2026-07-26
 
 ## Description
 
-系统采用 ADB 开发设备诊断架构。采集器读取前台应用帧数据，服务端将数据聚合为会话和窗口指标，并写入 ClickHouse。
+系统采用 ADB 开发设备诊断架构。采集器读取用户选择的设备和应用帧数据，服务端将数据聚合为会话和窗口指标，并写入 ClickHouse。
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A["Android device"] --> B["ADB collector"]
-  B --> C
+  A["Android device"] --> B["ADB device discovery"]
+  B --> I["Target selector"]
+  I --> C["ADB collector"]
   C --> D["WebSocket events"]
   C --> E["HTTP session APIs"]
   C --> H["ClickHouse analytics"]
@@ -20,13 +21,16 @@ flowchart LR
   E --> F
 ```
 
-开发设备通过 ADB 输出帧统计。服务端将帧统计转换为会话和窗口指标，并通过 HTTP 和 WebSocket 提供给看板。
+看板通过 ADB 设备发现接口列出在线设备与第三方应用。用户确认目标后，采集器仅从该设备和包名读取帧统计，并通过 HTTP 和 WebSocket 提供会话数据。
 
 ## Components and Interfaces
 
-- **ADB collector**: 以单次串行轮询采集前台包名、刷新率和 `gfxinfo` 帧数据。
+- **ADB device discovery**: 查询已连接设备及每个设备的第三方应用包名。
+- **Target selector**: 校验并保存用户选择的设备和包名，作为采集目标。
+- **ADB collector**: 以单次串行轮询采集选中设备、选中包名的刷新率和 `gfxinfo` 帧数据。
 - **Session aggregator**: 计算帧预算、卡顿率、冻结帧、平均值和分位数，保留趋势和风险事件。
 - **Session API**: 提供 `/api/health`、`/api/sessions` 与 `/api/sessions/:id`。
+- **Target API**: 提供 `/api/devices`、`/api/devices/:id/packages` 与 `/api/collector/connect`。
 - **Dashboard**: 订阅 `performance-event`、`incident-event` 与 `stack-event`，呈现会话概览、趋势与事件上下文。
 - **ClickHouse adapter**: 在配置 `PERFORMANCE_CLICKHOUSE_URL` 后将每个性能窗口写入 `performance.performance_windows`。
 
@@ -39,6 +43,7 @@ flowchart LR
 ## Correctness Properties
 
 - 每个轮询周期仅允许一个 ADB 采集任务运行。
+- 每个轮询周期仅使用当前已连接目标的设备 ID 和包名。
 - 每个性能窗口的卡顿率等于卡顿帧数除以总帧数。
 - 帧预算等于 1000 除以当前刷新率。
 - 分位数从当前窗口的全部有效帧耗时计算。
@@ -53,7 +58,7 @@ flowchart LR
 ## Test Strategy
 
 - 对帧解析、分位数、帧预算和卡顿判断编写单元测试。
-- 使用模拟 ADB 输出验证应用切换和采集失败处理。
+- 使用模拟 ADB 输出验证设备发现、应用选择和采集失败处理。
 - 验证前端可处理空会话、实时窗口与风险事件。
 
 ## References

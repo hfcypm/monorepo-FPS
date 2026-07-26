@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { classifyWindow, parseFrameCosts, percentile } from "../src/metrics";
+import { classifyWindow, parseConnectedDevices, parseFrameCosts, parseThirdPartyPackages, percentile } from "../src/metrics";
 
 describe("performance metrics", () => {
   it("parses valid gfxinfo profile rows", () => {
@@ -16,5 +16,17 @@ describe("performance metrics", () => {
     expect(classifyWindow(8, 0)).toBe("high");
     expect(classifyWindow(3, 0)).toBe("medium");
     expect(classifyWindow(1, 0)).toBe("normal");
+  });
+
+  it("keeps only authorized ADB devices and formats models", () => {
+    const output = "List of devices attached\nemulator-5554 device product:sdk model:Pixel_8 device:emu\n192.168.1.9:5555 offline\n";
+    expect(parseConnectedDevices(output)).toEqual([{ id: "emulator-5554", model: "Pixel 8" }]);
+  });
+
+  it("parses and sorts third-party package names", () => {
+    expect(parseThirdPartyPackages("package:com.zeta.app\npackage:com.alpha.app\ninvalid package\n")).toEqual([
+      "com.alpha.app",
+      "com.zeta.app",
+    ]);
   });
 });

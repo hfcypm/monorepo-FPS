@@ -26,3 +26,19 @@ export function parseFrameCosts(raw: string) {
     .map((parts) => parts.reduce((total, value) => total + value, 0))
     .filter((cost) => cost > 0);
 }
+
+export function parseConnectedDevices(raw: string) {
+  return raw.split("\n").slice(1).flatMap((line) => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 2 || parts[1] !== "device") return [];
+    const model = parts.find((part) => part.startsWith("model:"))?.slice(6).replaceAll("_", " ") ?? "Android device";
+    return [{ id: parts[0]!, model }];
+  });
+}
+
+export function parseThirdPartyPackages(raw: string) {
+  return raw.split("\n")
+    .map((line) => line.trim().replace(/^package:/, ""))
+    .filter((packageName) => /^[A-Za-z0-9._:-]+$/.test(packageName))
+    .sort((left, right) => left.localeCompare(right));
+}
