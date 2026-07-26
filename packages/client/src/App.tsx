@@ -194,7 +194,10 @@ export default function App() {
       } catch { /* WebSocket reconnect supplies diagnostics. */ }
     };
     const connect = () => {
-      socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+      const socketOrigin = import.meta.env.DEV
+        ? "ws://localhost:3001"
+        : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+      socket = new WebSocket(`${socketOrigin}/ws`);
       socket.onopen = () => { setConnected(true); setCollectorMessage("实时采集链路已建立"); };
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string; entry?: DiagnosticEntry; entries?: DiagnosticEntry[] };
