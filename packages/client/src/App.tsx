@@ -176,7 +176,6 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [connected, setConnected] = useState(false);
   const [collectorMessage, setCollectorMessage] = useState("等待本地采集器连接");
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [packages, setPackages] = useState<string[]>([]);
   const [selectedDevice, setSelectedDevice] = useState("");
@@ -227,7 +226,6 @@ export default function App() {
           console.info("[FPS WebSocket] 已接收性能窗口", { sessionId: payload.session.id, windowCount: payload.session.windows.length, fps: latest?.fps });
           setSession(payload.session);
         }
-        if ((payload.event === "incident" || payload.event === "stack") && payload.incident) setSelectedIncident(payload.incident);
         if (payload.event === "collector-error") {
           console.error("[Collector WebSocket] 服务端采集异常", payload.message ?? "采集器异常");
           setCollectorMessage(payload.message ?? "采集器异常");
@@ -395,7 +393,7 @@ export default function App() {
 
           <article className="panel incidents-panel">
             <div className="panel-header"><div><span className="section-kicker">RISK QUEUE</span><h2>待处置事件</h2></div><span className="event-total">{session?.incidents.length ?? 0} 条</span></div>
-            <div className="incident-list">{session?.incidents.length ? session.incidents.slice(0, 4).map((incident) => <button key={incident.id} className="incident" onClick={() => setSelectedIncident(incident)}><span className={`incident-dot ${incident.severity}`} /><div><b>{incident.reason}</b><small>{formatTime(incident.timestamp)} · 峰值 {incident.frameMs.toFixed(1)}ms</small></div><Icon name="arrow" /></button>) : <div className="empty-state"><span>0</span><b>未发现风险事件</b><p>采集器会持续关注高耗时帧。</p></div>}</div>
+            <div className="incident-list">{session?.incidents.length ? session.incidents.slice(0, 4).map((incident) => <div key={incident.id} className="incident"><span className={`incident-dot ${incident.severity}`} /><div><b>{incident.reason}</b><small>{formatTime(incident.timestamp)} · 峰值 {incident.frameMs.toFixed(1)}ms</small></div></div>) : <div className="empty-state"><span>0</span><b>未发现风险事件</b><p>采集器会持续关注高耗时帧。</p></div>}</div>
           </article>
 
           <article className="panel diagnostic-panel">
@@ -405,7 +403,5 @@ export default function App() {
         </section>
       </div>
     </section>
-
-    {selectedIncident && <div className="incident-drawer"><div className="drawer-backdrop" onClick={() => setSelectedIncident(null)} /><article className="drawer"><div className="drawer-header"><div><span className="section-kicker">INCIDENT DETAIL</span><h2>{selectedIncident.reason}</h2><p>{formatTime(selectedIncident.timestamp)} · 峰值帧耗时 {selectedIncident.frameMs.toFixed(1)}ms</p></div><button className="icon-button" onClick={() => setSelectedIncident(null)} aria-label="关闭事件详情">×</button></div><div className="stack-label">MAIN THREAD SNAPSHOT</div><pre>{selectedIncident.stack ?? "正在等待主线程诊断结果。"}</pre></article></div>}
   </main>;
 }
