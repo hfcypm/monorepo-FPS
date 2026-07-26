@@ -33,10 +33,6 @@ type Session = {
   startedAt: string;
   updatedAt: string;
   refreshRate: number;
-  source: "adb" | "sdk";
-  appVersion?: string;
-  androidVersion?: string;
-  scene?: string;
   status: "collecting" | "waiting" | "error";
   error?: string;
   totals: { frames: number; jankFrames: number; frozenFrames: number };
@@ -221,8 +217,8 @@ export default function App() {
 
         <section className="session-banner">
           <div className="session-symbol"><Icon name="devices" /></div>
-          <div className="session-main"><span className="section-kicker">ACTIVE DEVICE SESSION</span><h2>{session?.packageName ?? "等待当前前台应用"}</h2><div className="session-meta"><span>{device}</span><em /> <span>{session?.source === "sdk" ? "SDK 上报" : "ADB 本地诊断"}</span><em /> <span>{session?.scene ?? "未标记场景"}</span></div></div>
-          <div className="session-tags"><span className={`status-chip status-${severity}`}>{severityLabel[severity]}</span><span className="session-id">{session?.appVersion ?? "本地会话"}</span></div>
+          <div className="session-main"><span className="section-kicker">ACTIVE DEVICE SESSION</span><h2>{session?.packageName ?? "等待当前前台应用"}</h2><div className="session-meta"><span>{device}</span><em /> <span>ADB 本地诊断</span></div></div>
+          <div className="session-tags"><span className={`status-chip status-${severity}`}>{severityLabel[severity]}</span><span className="session-id">实时采集</span></div>
         </section>
 
         <section className="metrics-grid">

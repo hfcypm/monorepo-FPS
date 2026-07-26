@@ -3,12 +3,8 @@ CREATE DATABASE IF NOT EXISTS performance;
 CREATE TABLE IF NOT EXISTS performance.performance_windows
 (
   sessionId String,
-  source LowCardinality(String),
   deviceId String,
   packageName LowCardinality(String),
-  appVersion LowCardinality(String),
-  androidVersion LowCardinality(String),
-  scene LowCardinality(String),
   timestamp DateTime64(3, 'UTC'),
   refreshRate Float32,
   frameBudgetMs Float32,
@@ -24,5 +20,5 @@ CREATE TABLE IF NOT EXISTS performance.performance_windows
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (packageName, appVersion, scene, timestamp, deviceId)
+ORDER BY (packageName, timestamp, deviceId)
 TTL timestamp + INTERVAL 180 DAY;

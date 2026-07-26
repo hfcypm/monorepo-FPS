@@ -37,10 +37,6 @@ type PerformanceSession = {
   startedAt: string;
   updatedAt: string;
   refreshRate: number;
-  source: "adb" | "sdk";
-  appVersion?: string;
-  androidVersion?: string;
-  scene?: string;
   status: "collecting" | "waiting" | "error";
   error?: string;
   totals: {
@@ -50,23 +46,6 @@ type PerformanceSession = {
   };
   windows: PerformanceWindow[];
   incidents: PerformanceIncident[];
-};
-
-type PerformanceIngestPayload = {
-  sessionId?: string;
-  deviceId: string;
-  packageName: string;
-  appVersion: string;
-  androidVersion: string;
-  scene: string;
-  refreshRate: number;
-  windowMs: number;
-  totalFrames: number;
-  jankFrames: number;
-  frozenFrames: number;
-  averageFrameMs: number;
-  p95FrameMs: number;
-  p99FrameMs: number;
 };
 
 const app = new Elysia().use(staticPlugin({ assets: "dist", prefix: "/" }));
@@ -131,7 +110,6 @@ async function ensureSession(packageName: string, refreshRate: number) {
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     refreshRate,
-    source: "adb",
     status: "collecting",
     totals: { frames: 0, jankFrames: 0, frozenFrames: 0 },
     windows: [],
@@ -162,88 +140,10 @@ async function captureMainStack(session: PerformanceSession, incident: Performan
 function persistWindow(session: PerformanceSession, window: PerformanceWindow) {
   void persistPerformanceWindow({
     sessionId: session.id,
-    source: session.source,
     deviceId: session.deviceId,
     packageName: session.packageName,
-    appVersion: session.appVersion,
-    androidVersion: session.androidVersion,
-    scene: session.scene,
     ...window,
   }).catch((error) => console.error(error));
-}
-
-function validPayload(payload: Partial<PerformanceIngestPayload>): payload is PerformanceIngestPayload {
-  const numbers = [
-    payload.refreshRate,
-    payload.windowMs,
-    payload.totalFrames,
-    payload.jankFrames,
-    payload.frozenFrames,
-    payload.averageFrameMs,
-    payload.p95FrameMs,
-    payload.p99FrameMs,
-  ];
-  return [payload.deviceId, payload.packageName, payload.appVersion, payload.androidVersion, payload.scene]
-    .every((value) => typeof value === "string" && value.length > 0)
-    && numbers.every((value) => typeof value === "number" && Number.isFinite(value))
-    && (payload.refreshRate ?? 0) >= 30
-    && (payload.totalFrames ?? 0) > 0
-    && (payload.averageFrameMs ?? 0) > 0
-    && (payload.jankFrames ?? 0) <= (payload.totalFrames ?? 0)
-    && (payload.frozenFrames ?? 0) <= (payload.totalFrames ?? 0);
-}
-
-function ingestSdkWindow(payload: PerformanceIngestPayload) {
-  const id = payload.sessionId ?? randomUUID();
-  let session = sessions.get(id);
-  const timestamp = new Date().toISOString();
-  if (!session) {
-    session = {
-      id,
-      deviceId: payload.deviceId,
-      packageName: payload.packageName,
-      startedAt: timestamp,
-      updatedAt: timestamp,
-      refreshRate: payload.refreshRate,
-      source: "sdk",
-      appVersion: payload.appVersion,
-      androidVersion: payload.androidVersion,
-      scene: payload.scene,
-      status: "collecting",
-      totals: { frames: 0, jankFrames: 0, frozenFrames: 0 },
-      windows: [],
-      incidents: [],
-    };
-    sessions.set(id, session);
-  }
-
-  const jankRate = (payload.jankFrames / payload.totalFrames) * 100;
-  const window: PerformanceWindow = {
-    timestamp,
-    fps: Math.min(payload.refreshRate, Math.round(1000 / payload.averageFrameMs)),
-    refreshRate: payload.refreshRate,
-    frameBudgetMs: 1000 / payload.refreshRate,
-    totalFrames: payload.totalFrames,
-    jankFrames: payload.jankFrames,
-    frozenFrames: payload.frozenFrames,
-    averageFrameMs: payload.averageFrameMs,
-    p95FrameMs: payload.p95FrameMs,
-    p99FrameMs: payload.p99FrameMs,
-    jankRate,
-    severity: classifyWindow(jankRate, payload.frozenFrames),
-  };
-  session.updatedAt = timestamp;
-  session.refreshRate = payload.refreshRate;
-  session.scene = payload.scene;
-  session.totals.frames += window.totalFrames;
-  session.totals.jankFrames += window.jankFrames;
-  session.totals.frozenFrames += window.frozenFrames;
-  session.windows.push(window);
-  if (session.windows.length > MAX_WINDOWS) session.windows.shift();
-  activeSession = session;
-  persistWindow(session, window);
-  app.server?.publish("performance-event", JSON.stringify({ event: "performance", session }));
-  return session;
 }
 
 async function collectPerformance() {
@@ -340,21 +240,6 @@ app.get("/api/sessions", () => ({ activeSession, sessions: [...sessions.values()
 app.get("/api/sessions/:id", ({ params }) => (
   sessions.get(params.id) ?? { error: "会话不存在" }
 ));
-
-app.post("/api/ingest/windows", ({ body, headers, set }) => {
-  const ingestionToken = process.env.PERFORMANCE_INGEST_TOKEN;
-  if (ingestionToken && headers.authorization !== `Bearer ${ingestionToken}`) {
-    set.status = 401;
-    return { error: "上报凭证无效" };
-  }
-  const payload = body as Partial<PerformanceIngestPayload>;
-  if (!validPayload(payload)) {
-    set.status = 400;
-    return { error: "性能窗口字段无效" };
-  }
-  const session = ingestSdkWindow(payload);
-  return { accepted: true, sessionId: session.id };
-});
 
 app.ws("/ws", {
   open(ws) {

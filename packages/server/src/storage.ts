@@ -1,11 +1,7 @@
 export type PerformanceRecord = {
   sessionId: string;
-  source: "adb" | "sdk";
   deviceId: string;
   packageName: string;
-  appVersion?: string;
-  androidVersion?: string;
-  scene?: string;
   timestamp: string;
   refreshRate: number;
   frameBudgetMs: number;
