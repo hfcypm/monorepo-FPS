@@ -79,6 +79,29 @@ bun run --filter '@my-monorepo/client' dev
 bun run --filter '@my-monorepo/shared' test
 ```
 
+## ADB 本地诊断模式
+
+服务端支持直接读取已授权 Android 设备的当前前台应用，无需在应用工程中集成 SDK。采集器通过 `dumpsys gfxinfo` 提取帧耗时、FPS、卡顿率、P95、P99 和冻结帧，并在高风险窗口尝试获取主线程堆栈。
+
+```bash
+export ADB_PATH=/opt/android-sdk/platform-tools/adb
+bun run --filter '@my-monorepo/server' dev
+```
+
+开发看板通过以下命令启动：
+
+```bash
+bun run --filter '@my-monorepo/client' dev
+```
+
+设备连接后执行以下命令确认授权状态：
+
+```bash
+$ADB_PATH devices -l
+```
+
+设备列表出现 `device` 状态后，打开看板即可查看当前前台应用的实时性能数据。
+
 ## 技术栈
 
 - **运行时**: Bun 1.3
