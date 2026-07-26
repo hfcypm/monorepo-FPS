@@ -174,6 +174,7 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [targetMessage, setTargetMessage] = useState("刷新设备列表后选择诊断目标");
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   useEffect(() => {
     let socket: WebSocket | undefined;
@@ -197,23 +198,42 @@ export default function App() {
       const socketOrigin = import.meta.env.DEV
         ? "ws://localhost:3001"
         : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
-      socket = new WebSocket(`${socketOrigin}/ws`);
-      socket.onopen = () => { setConnected(true); setCollectorMessage("实时采集链路已建立"); };
+      const socketUrl = `${socketOrigin}/ws`;
+      console.info("[Collector WebSocket] 正在连接", { socketUrl, reason: connectionEpoch ? "采集目标已更新" : "页面初始化" });
+      socket = new WebSocket(socketUrl);
+      socket.onopen = () => {
+        console.info("[Collector WebSocket] 连接成功", { socketUrl });
+        setConnected(true);
+        setCollectorMessage("实时采集链路已建立");
+      };
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data) as { event: string; session?: Session; incident?: Incident; message?: string; entry?: DiagnosticEntry; entries?: DiagnosticEntry[] };
         if (payload.event === "performance" && payload.session) setSession(payload.session);
         if ((payload.event === "incident" || payload.event === "stack") && payload.incident) setSelectedIncident(payload.incident);
-        if (payload.event === "collector-error") setCollectorMessage(payload.message ?? "采集器异常");
+        if (payload.event === "collector-error") {
+          console.error("[Collector WebSocket] 服务端采集异常", payload.message ?? "采集器异常");
+          setCollectorMessage(payload.message ?? "采集器异常");
+        }
         if (payload.event === "diagnostics" && payload.entries) setDiagnostics(payload.entries);
-        if (payload.event === "diagnostic" && payload.entry) setDiagnostics((entries) => [payload.entry!, ...entries.filter((entry) => entry.id !== payload.entry!.id)].slice(0, 80));
+        if (payload.event === "diagnostic" && payload.entry) {
+          const { entry } = payload;
+          console[entry.level === "error" ? "error" : entry.level === "warning" ? "warn" : "info"]("[Collector Diagnostic]", entry.message, entry.detail ?? "");
+          setDiagnostics((entries) => [entry, ...entries.filter((item) => item.id !== entry.id)].slice(0, 80));
+        }
       };
-      socket.onclose = () => { setConnected(false); if (!disposed) retryTimer = window.setTimeout(connect, 2000); };
+      socket.onerror = (event) => console.error("[Collector WebSocket] 连接失败", { socketUrl, event });
+      socket.onclose = (event) => {
+        setConnected(false);
+        if (disposed) return;
+        console.warn("[Collector WebSocket] 连接关闭，2 秒后重试", { socketUrl, code: event.code, reason: event.reason });
+        retryTimer = window.setTimeout(connect, 2000);
+      };
     };
     void loadSession();
     void loadDiagnostics();
     connect();
     return () => { disposed = true; if (retryTimer) window.clearTimeout(retryTimer); socket?.close(); };
-  }, []);
+  }, [connectionEpoch]);
 
   const refreshDevices = async () => {
     try {
@@ -265,9 +285,12 @@ export default function App() {
       });
       const payload = await response.json() as { connected?: boolean; error?: string };
       if (!response.ok || !payload.connected) throw new Error(payload.error ?? "采集连接失败");
+      console.info("[Collector Target] 服务端已确认采集目标", { deviceId: selectedDevice, packageName: selectedPackage });
       setSession(null);
       setTargetMessage(`正在采集 ${selectedPackage}`);
+      setConnectionEpoch((epoch) => epoch + 1);
     } catch (error) {
+      console.error("[Collector Target] 采集目标连接失败", { deviceId: selectedDevice, packageName: selectedPackage, error });
       setTargetMessage(error instanceof Error ? error.message : "采集连接失败");
     } finally {
       setIsConnecting(false);

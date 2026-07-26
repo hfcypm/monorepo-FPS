@@ -32,7 +32,7 @@ flowchart LR
 - **Session API**: 提供 `/api/health`、`/api/sessions` 与 `/api/sessions/:id`。
 - **Target API**: 提供 `/api/devices`、`/api/devices/:id/packages` 与 `/api/collector/connect`。
 - **Diagnostics API**: 提供 `/api/diagnostics`，并通过 `diagnostic-event` 推送连接和采样日志。
-- **Dashboard**: 订阅 `performance-event`、`incident-event` 与 `stack-event`，呈现会话概览、趋势与事件上下文。
+- **Dashboard**: 在采集目标连接成功后重建 WebSocket，订阅事件并在浏览器控制台输出连接、关闭和采集异常诊断信息。
 - **ClickHouse adapter**: 在配置 `PERFORMANCE_CLICKHOUSE_URL` 后将每个性能窗口写入 `performance.performance_windows`。
 
 ## Data Models

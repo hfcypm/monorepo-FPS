@@ -85,3 +85,13 @@
 2. WHEN 采集器读取帧数据, the system SHALL 记录帧数量和 FPS。
 3. IF 采集器无法读取设备、包名或帧数据, the system SHALL 记录失败原因和操作建议。
 4. WHILE 看板连接处于活动状态, the dashboard SHALL 实时显示最近 80 条诊断日志。
+
+### Requirement 8: 连接重建控制台诊断
+
+**User Story:** AS 性能工程师, I want 在连接采集目标后查看浏览器控制台的 WebSocket 日志, so that 可以定位看板与采集服务之间的连接异常。
+
+#### Acceptance Criteria
+
+1. WHEN 用户成功连接设备和包名, the dashboard SHALL 关闭当前 WebSocket 并创建新的 WebSocket 连接。
+2. WHEN WebSocket 建立成功, the dashboard SHALL 在浏览器控制台记录连接地址和成功状态。
+3. IF WebSocket 建立失败、关闭或接收到采集器错误事件, the dashboard SHALL 在浏览器控制台记录错误详情和连接地址。
